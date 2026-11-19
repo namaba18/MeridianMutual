@@ -65,7 +65,7 @@ Not drawn, to keep the diagram readable: every Azure service reads its secrets f
 | **payment-intake** | Verifies the provider's signature, translates the payload into the canonical event, publishes it and only then answers `2xx` to the provider. |
 | **Service Bus** | Durable buffer between the providers and Salesforce. One subscription per consumer, each with its own dead-letter queue. The Salesforce subscriptions use sessions per payment (see 4.4). |
 | **salesforce-writer** | Reads events, discards stale ones and upserts `Premium_Payment__c` in batches. |
-| **Cosmos DB** | Status of each notification (received, recorded, failed, dead-lettered) and latest state of each payment. |
+| **Cosmos DB** | Status of each notification (received, recorded, skipped, failed, dead-lettered) and latest state of each payment. |
 | **payment-ops** | Lets operations look up a notification by its provider id (FR7). |
 | **Key Vault** | Provider webhook secrets and the Salesforce client secret. |
 | **Azure Monitor** | Logs, traces and alerts per country, without payer personal data. |
@@ -78,7 +78,7 @@ Not drawn, to keep the diagram readable: every Azure service reads its secrets f
 | API Manager → Azure | Private network plus a machine-to-machine token from the IdP |
 | Inside Azure | Managed identities with least privilege. No keys or connection strings. |
 | Azure → Salesforce | OAuth client credentials, dedicated integration user |
-| Operations → payment-ops | Corporate SSO with a `payments-ops` role. Responses carry no personal data. |
+| Operations → payment-ops | Corporate SSO with the `payments-ops-read` role (`payments-ops-replay` for replays). Responses carry no personal data. |
 
 ## 2. Sequence diagram
 
@@ -138,7 +138,7 @@ sequenceDiagram
             SFW->>SB: dead-letter now, no retry
             SFW->>DB: status DEAD_LETTERED
         else 5xx or timeout (Salesforce unavailable)
-            SFW->>SB: retry later with backoff
+            SFW->>SFW: open circuit breaker, events wait in the queue
         else 403 REQUEST_LIMIT_EXCEEDED
             SFW->>SFW: pause reading until the limit recovers
         end
@@ -355,7 +355,8 @@ The principle: **retry only what time can fix**. Everything else stops at once, 
 | Error | Retried? | How | Then |
 |---|---|---|---|
 | Invalid signature or old timestamp | No | `401` | Nothing is stored. An alert fires if the rate is abnormal: either an attack or a secret rotation went wrong. |
-| Service Bus or Cosmos DB unavailable | By the **provider** | `503`. One quick internal retry only if time allows (Andina: 5 s budget). | The provider retries with its own policy: Quetzal up to 3 days, Andina 5 times in 24 h, Austral 8 times in 48 h. |
+| Service Bus unavailable | By the **provider** | `503`. One quick internal retry only if time allows (internal deadline of 3 s, ADR-0003). | The provider retries with its own policy: Quetzal up to 3 days, Andina 5 times in 24 h, Austral 8 times in 48 h. |
+| Cosmos DB unavailable | No | The duplicate lookup is skipped and the event is still published (ADR-0003). | Duplicates are caught by Service Bus duplicate detection and by the ordering rule in `salesforce-writer`. |
 | Valid signature, but unknown state or unreadable payload | No | `200`, sent to quarantine (5.2) | Reviewed and replayed once the adapter is fixed. |
 
 **In `salesforce-writer` (asynchronous)**
@@ -400,6 +401,8 @@ Replays are done only through `payment-ops`, never by hand in the queue explorer
 5. **Only to the subscription of origin.** Each replayed message carries a `replayTarget` property, and only that subscription's filter accepts it. Finance and Notifications do not receive the event twice.
 6. **New `messageId`, same `eventId`.** The replay gets `messageId = <eventId>:replay:<n>` so Service Bus duplicate detection does not drop it. The `eventId` stays the same, so the ordering rule (4.3) still decides. A replayed `CAPTURED` can never overwrite a newer `REFUNDED`.
 7. **Audit.** Each replay records who ran it, when, which messages and the outcome. It requires the `payments-ops-replay` role.
+
+Messages from `payments-quarantine` are not canonical events yet. Their replay goes through the fixed provider adapter in `payment-intake`, which maps them and publishes them like a new notification. The signature is not checked again: it was verified when the notification was received.
 
 Because the ordering rule decides every write, the order of the replay does not matter. Replaying an `APROBADA` and its `REVERSADA` together always ends as `Refunded`.
 
@@ -587,7 +590,7 @@ This is a small store. Its cost is driven by throughput at peak (RU/s), not by s
 - Private endpoint only, public network access disabled.
 - Microsoft Entra ID data-plane roles per managed identity: `payment-intake` writes `notifications`; `salesforce-writer` writes `notifications` and `payment-state`; `payment-ops` only reads, except for `replay-audit`. No account keys are used.
 - Encryption at rest by default.
-- `policyNumber` is a business identifier, not payer data, but it can be linked to a customer. Access is therefore limited to the `payments-ops` role, and it is never written to logs.
+- `policyNumber` is a business identifier, not payer data, but it can be linked to a customer. Access is therefore limited to the `payments-ops-read` role, and it is never written to logs.
 
 ## 8. Operations: finding a notification (FR7)
 
