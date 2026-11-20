@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: payment-intake
+  threads:
+    virtual:
+      enabled: true
+
+server:
+  port: 8080
+  # Body size: capped at 256 KB by the API Manager, and checked again in WebhookController (413).
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+# Never log request bodies: they contain payer personal data (NFR6).
+logging:
+  level:
+    root: INFO
+    org.springframework.web: WARN
