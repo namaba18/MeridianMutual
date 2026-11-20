@@ -39,12 +39,12 @@ jobs:
         run: ./mvnw -B -ntp verify
       - name: Upload test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports
           path: practical/target/surefire-reports/
       - name: Upload jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: payment-intake-jar
           path: practical/target/payment-intake-*.jar
