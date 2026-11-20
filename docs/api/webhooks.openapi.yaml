@@ -1,0 +1,430 @@
+openapi: 3.0.3
+info:
+  title: Premium Payment Notifications — Provider Webhooks
+  version: 1.0.0
+  description: |
+    Webhook endpoints that payment providers call to notify payment events.
+    Published through Meridian's API Manager (internet-facing). The API Manager
+    forwards the body **byte for byte** to `payment-intake`, because signatures
+    are computed over the raw body.
+
+    Scope of this version: **Quetzal Pagos (MX)** and **Andina Pay (CO)**.
+    Austral Pagos (CL) will be added as a new path with its own adapter,
+    without changing the existing ones.
+
+    **Acceptance rule (NFR3, ADR-0003).** A `2xx` response means the
+    notification is durably stored and will not be lost. Any other response
+    means it was **not** accepted and the provider must retry.
+
+    | Situation | Response |
+    |---|---|
+    | New, valid notification | `200` |
+    | Duplicate of a notification already accepted | `200` (nothing is processed twice) |
+    | Valid signature, but unknown state, unreadable payload or policy reference that cannot be normalized | `200` (kept in quarantine for review) |
+    | Missing or invalid signature, or timestamp outside the window | `401` |
+    | Body larger than 256 KB | `413` (API Manager) |
+    | Rate limit exceeded | `429` (API Manager) |
+    | Meridian temporarily unable to store it | `503` |
+
+    Payer personal data in the request (names, national ids, emails) is never
+    stored, logged or forwarded.
+
+    **Request schemas document the payload; they are not enforced at the
+    gateway.** The API Manager must not validate the body against them. A
+    gateway `400` would make the provider retry a notification that will never
+    pass, instead of quarantining it. The body is checked by `payment-intake`
+    **after** the signature is verified.
+  contact:
+    name: Payments Integration squad
+
+servers:
+  - url: https://api.meridian.example/payments
+    description: Production (API Manager, internet-facing)
+  - url: https://api-test.meridian.example/payments
+    description: Test (API Manager, providers' sandboxes)
+
+tags:
+  - name: Quetzal (MX)
+  - name: Andina (CO)
+
+paths:
+  /v1/webhooks/quetzal:
+    post:
+      tags: [Quetzal (MX)]
+      operationId: receiveQuetzalNotification
+      summary: Receive a Quetzal Pagos charge event
+      description: |
+        Quetzal expects an answer within **10 s**; Meridian answers within 3 s.
+        Quetzal retries non-`2xx` responses with exponential backoff for up to
+        3 days, with the same `id` and an identical body.
+
+        **Signature check:**
+        1. Parse `t` and every `v1` from `Quetzal-Signature`.
+        2. Reject if `|now − t| > 300 s`.
+        3. Compute the lowercase hex HMAC-SHA256 of `<t>.<raw body>` with the webhook secret.
+        4. Valid if **any** `v1` matches (secret rotation), compared in constant time.
+      security:
+        - quetzalSignature: []
+      parameters:
+        - $ref: '#/components/parameters/QuetzalSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuetzalEvent'
+            examples:
+              chargeSucceeded:
+                summary: reference/providers/quetzal-mx/samples/01-charge-succeeded.json
+                value:
+                  id: evt_01JDQ3K8M2X7
+                  type: charge.succeeded
+                  api_version: '2025-06-01'
+                  created: 1795888800
+                  data:
+                    charge:
+                      id: ch_7Hk2Lm9QpZ
+                      amount: 125000
+                      currency: mxn
+                      status: succeeded
+                      reference: POL-MX-000412785
+                      paid_at: 1795888796
+                      payment_method:
+                        type: card
+                        token: tok_qz_9sD2fK
+                      customer:
+                        email: maria.lopez@example.com
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /v1/webhooks/andina:
+    post:
+      tags: [Andina (CO)]
+      operationId: receiveAndinaNotification
+      summary: Receive an Andina Pay transaction notification
+      description: |
+        Andina expects `200` or `204` within **5 s**; Meridian answers within 3 s.
+        Andina retries up to 5 times within 24 h, and **every retry has a new
+        `notificacion_id`**. Duplicates are detected by `transaccion.id` +
+        `transaccion.estado`, not by `notificacion_id`.
+
+        **Signature check:**
+        1. Reject if `X-Andina-Timestamp` differs from now by more than 10 minutes.
+        2. Compute the Base64 HMAC-SHA256 of `<X-Andina-Timestamp>.<raw body>` with the merchant secret.
+        3. Compare with `X-Andina-Signature` in constant time.
+
+        Since Andina API 2.3, `transaccion.referencia` arrives as typed by the
+        payer. Meridian normalizes it to `POL-CO-NNNNNNNNN`. Unknown fields
+        (for example `transaccion.canal`) are ignored.
+      security:
+        - andinaSignature: []
+      parameters:
+        - $ref: '#/components/parameters/AndinaTimestamp'
+        - $ref: '#/components/parameters/AndinaSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AndinaNotification'
+            examples:
+              transaccionAprobada:
+                summary: reference/providers/andina-co/samples/02-transaccion-aprobada.json
+                value:
+                  notificacion_id: ntf-8f1c2a77
+                  fecha_notificacion: '2026-11-28T14:03:11-05:00'
+                  transaccion:
+                    id: TRX-CO-5521907
+                    estado: APROBADA
+                    valor: '185000.00'
+                    moneda: COP
+                    referencia: POL-CO-000187342
+                    medio_pago: PSE
+                    fecha_transaccion: '2026-11-28T14:03:09-05:00'
+                    pagador:
+                      nombre: Laura Gómez
+                      documento: CC 1020304050
+                      correo: laura.gomez@example.com
+      responses:
+        '200':
+          $ref: '#/components/responses/Accepted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    quetzalSignature:
+      type: apiKey
+      in: header
+      name: Quetzal-Signature
+      description: |
+        `t=<unix_timestamp>,v1=<hex_hmac_sha256>` (may contain several `v1`
+        during secret rotation). HMAC-SHA256 over `<t>.<raw body>`.
+        Secret stored in Key Vault, never in configuration.
+    andinaSignature:
+      type: apiKey
+      in: header
+      name: X-Andina-Signature
+      description: |
+        Base64 HMAC-SHA256 over `<X-Andina-Timestamp>.<raw body>`.
+        Secret stored in Key Vault, never in configuration.
+
+  parameters:
+    QuetzalSignature:
+      name: Quetzal-Signature
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 512
+        pattern: '^t=\d+(,[a-z0-9]+=[0-9a-f]+)+$'
+      description: Other signature schemes besides `v1` may appear and are ignored. At least one `v1` must match.
+      example: t=1795888803,v1=2d07770582c02f15235ac4e027b7732beef86be103c574a1c3b988a4275f5031
+    AndinaTimestamp:
+      name: X-Andina-Timestamp
+      in: header
+      required: true
+      schema:
+        type: string
+        format: date-time
+      example: '2026-11-28T14:03:11-05:00'
+    AndinaSignature:
+      name: X-Andina-Signature
+      in: header
+      required: true
+      schema:
+        type: string
+        maxLength: 128
+      example: MFQjfviySi6CjqbWtQcy5spKtXxHIxAvmg5W3PTzPJk=
+
+  headers:
+    CorrelationId:
+      description: Identifier Meridian assigned to this notification. Share it with Meridian support to trace it.
+      schema:
+        type: string
+        format: uuid
+    RetryAfter:
+      description: Seconds the provider should wait before retrying.
+      schema:
+        type: integer
+        minimum: 1
+
+  responses:
+    Accepted:
+      description: Accepted. The notification is durably stored (or was already). The provider must not retry.
+      headers:
+        X-Correlation-Id:
+          $ref: '#/components/headers/CorrelationId'
+    Unauthorized:
+      description: Not accepted. Missing or invalid signature, or timestamp outside the allowed window. Nothing is stored.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.meridian.example/problems/invalid-signature
+            title: Invalid signature
+            status: 401
+    PayloadTooLarge:
+      description: Not accepted. The body exceeds 256 KB.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Not accepted. Rate limit exceeded at the API Manager. The provider should retry later.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Not accepted. Meridian could not store the notification durably. The provider must retry.
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        X-Correlation-Id:
+          $ref: '#/components/headers/CorrelationId'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+          example:
+            type: https://api.meridian.example/problems/temporarily-unavailable
+            title: Temporarily unavailable
+            status: 503
+
+  schemas:
+    Problem:
+      description: RFC 9457 problem details. Never contains payload data or internal error messages.
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+
+    # ---------------- Quetzal (MX) ----------------
+    QuetzalEvent:
+      description: |
+        Quetzal Pagos webhook event, API version `2025-06-01`. Only the fields
+        Meridian uses are listed; other fields are allowed and ignored.
+        `type` is not an enum on purpose: an unknown type is still accepted
+        and quarantined instead of rejected.
+      type: object
+      required: [id, type, created, data]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          description: Event id, stable across retries.
+          example: evt_01JDQ3K8M2X7
+        type:
+          type: string
+          description: 'Known values: `charge.succeeded`, `charge.failed`, `charge.refunded`.'
+          example: charge.succeeded
+        api_version:
+          type: string
+          example: '2025-06-01'
+        created:
+          type: integer
+          format: int64
+          description: Event time, Unix seconds (UTC).
+        data:
+          type: object
+          required: [charge]
+          additionalProperties: true
+          properties:
+            charge:
+              $ref: '#/components/schemas/QuetzalCharge'
+
+    QuetzalCharge:
+      type: object
+      required: [id, amount, currency, reference]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          description: Charge id. Several events can refer to the same charge.
+          example: ch_7Hk2Lm9QpZ
+        amount:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Amount in the **minor unit** (centavos). `125000` = MXN 1,250.00.
+        amount_refunded:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Only in `charge.refunded`. Cumulative, minor unit (assumption 1).
+        currency:
+          type: string
+          description: ISO 4217, lowercase.
+          example: mxn
+        status:
+          type: string
+        failure_code:
+          type: string
+          description: Only in `charge.failed`.
+        reference:
+          type: string
+          description: Policy number sent by Meridian, `POL-MX-NNNNNNNNN`.
+          example: POL-MX-000412785
+        paid_at:
+          type: integer
+          format: int64
+          nullable: true
+        refunded_at:
+          type: integer
+          format: int64
+          nullable: true
+        payment_method:
+          type: object
+          description: Payment method type and token only. Ignored by Meridian.
+          additionalProperties: true
+        customer:
+          type: object
+          description: '**Personal data.** Ignored by Meridian: never stored or logged.'
+          additionalProperties: true
+
+    # ---------------- Andina (CO) ----------------
+    AndinaNotification:
+      description: |
+        Andina Pay notification, API version 2.3. Only the fields Meridian uses
+        are listed; unknown fields are allowed and ignored. `estado` is not an
+        enum on purpose: an unknown state is accepted and quarantined.
+      type: object
+      required: [notificacion_id, fecha_notificacion, transaccion]
+      additionalProperties: true
+      properties:
+        notificacion_id:
+          type: string
+          description: Id of this delivery attempt. **Changes on every retry.**
+          example: ntf-8f1c2a77
+        fecha_notificacion:
+          type: string
+          format: date-time
+        transaccion:
+          $ref: '#/components/schemas/AndinaTransaccion'
+
+    AndinaTransaccion:
+      type: object
+      required: [id, estado, valor, moneda, referencia, fecha_transaccion]
+      additionalProperties: true
+      properties:
+        id:
+          type: string
+          example: TRX-CO-5521907
+        estado:
+          type: string
+          description: 'Known values: `PENDIENTE`, `APROBADA`, `RECHAZADA`, `REVERSADA`.'
+          example: APROBADA
+        valor:
+          type: string
+          description: Decimal amount in the **major unit**, two decimals (for example `185000.00`).
+          example: '185000.00'
+        moneda:
+          type: string
+          example: COP
+        referencia:
+          type: string
+          description: As typed by the payer since API 2.3. Normalized by Meridian to `POL-CO-NNNNNNNNN`.
+          example: POL-CO-000187342
+        medio_pago:
+          type: string
+          description: '`PSE`, `TARJETA`, `EFECTIVO`. Ignored by Meridian.'
+        fecha_transaccion:
+          type: string
+          format: date-time
+          description: Time of the state change.
+        motivo_reverso:
+          type: string
+          description: Only for `REVERSADA`.
+        canal:
+          type: string
+          description: Optional since API 2.3 (`WEB`, `APP`, `OFICINA`). Ignored by Meridian.
+        pagador:
+          type: object
+          description: '**Personal data.** Ignored by Meridian: never stored or logged.'
+          additionalProperties: true

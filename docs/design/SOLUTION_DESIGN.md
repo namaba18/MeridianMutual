@@ -244,7 +244,9 @@ The Andina 2.3 change means `referencia` can arrive as `000215560` or `pol-co-00
 1. Trim and upper-case.
 2. If it matches `POL-CO-\d{9}`, use it.
 3. If it is exactly 9 digits, prefix `POL-CO-`.
-4. Otherwise, publish it as received. The `salesforce-writer` dead-letters it with reason `POLICY_NOT_FOUND` for manual review.
+4. Otherwise, it is **not published**. It goes to `payments-quarantine` with reason `INVALID_POLICY_REFERENCE`, and operations replays it with the corrected policy number (audited, see 5.3). The canonical event therefore always carries a well-formed policy number, and no Salesforce call is spent on a reference that cannot match.
+
+A well-formed number that does not exist in Salesforce is still detected by the `salesforce-writer` (`400 INVALID_FIELD`) and dead-lettered with reason `POLICY_NOT_FOUND`.
 
 ### 3.6 Refunds, including partial refunds
 
@@ -357,7 +359,7 @@ The principle: **retry only what time can fix**. Everything else stops at once, 
 | Invalid signature or old timestamp | No | `401` | Nothing is stored. An alert fires if the rate is abnormal: either an attack or a secret rotation went wrong. |
 | Service Bus unavailable | By the **provider** | `503`. One quick internal retry only if time allows (internal deadline of 3 s, ADR-0003). | The provider retries with its own policy: Quetzal up to 3 days, Andina 5 times in 24 h, Austral 8 times in 48 h. |
 | Cosmos DB unavailable | No | The duplicate lookup is skipped and the event is still published (ADR-0003). | Duplicates are caught by Service Bus duplicate detection and by the ordering rule in `salesforce-writer`. |
-| Valid signature, but unknown state or unreadable payload | No | `200`, sent to quarantine (5.2) | Reviewed and replayed once the adapter is fixed. |
+| Valid signature, but unknown state, unreadable payload or policy reference that cannot be normalized | No | `200`, sent to quarantine (5.2) | Reviewed and replayed once the adapter is fixed. |
 
 **In `salesforce-writer` (asynchronous)**
 
@@ -381,11 +383,11 @@ Two details matter here:
 |---|---|---|
 | DLQ of each `sf-writer-*` subscription | `salesforce-writer` | Canonical events that could not be recorded in Salesforce |
 | DLQ of `finance` and `notifications` | The consumers themselves | Their own failures. They own them. |
-| `payments-quarantine` | `payment-intake` | Authentic notifications that cannot be mapped (unknown state, unreadable payload). Payer fields are removed before storing. |
+| `payments-quarantine` | `payment-intake` | Authentic notifications that cannot be mapped (unknown state, unreadable payload, policy reference that cannot be normalized). Payer fields are removed before storing. |
 
 Every dead-lettered or quarantined message carries:
 
-- A **reason code**: `POLICY_NOT_FOUND`, `SALESFORCE_VALIDATION`, `CONFLICTING_STATE`, `RETRIES_EXHAUSTED`, `UNKNOWN_PROVIDER_STATUS`, `INVALID_PAYLOAD` or `MaxDeliveryCountExceeded`.
+- A **reason code**: `POLICY_NOT_FOUND`, `SALESFORCE_VALIDATION`, `CONFLICTING_STATE`, `RETRIES_EXHAUSTED`, `UNKNOWN_PROVIDER_STATUS`, `INVALID_PAYLOAD`, `INVALID_POLICY_REFERENCE` or `MaxDeliveryCountExceeded`.
 - The `correlationId`, the provider ids and the last error. Never payer personal data.
 
 The notification's status in Cosmos DB becomes `DEAD_LETTERED` with the same reason, so operations sees it without searching logs (FR7). An alert fires as soon as **any** DLQ or quarantine of **any** country is not empty. In INC-0412 only Mexico had one.
@@ -402,7 +404,7 @@ Replays are done only through `payment-ops`, never by hand in the queue explorer
 6. **New `messageId`, same `eventId`.** The replay gets `messageId = <eventId>:replay:<n>` so Service Bus duplicate detection does not drop it. The `eventId` stays the same, so the ordering rule (4.3) still decides. A replayed `CAPTURED` can never overwrite a newer `REFUNDED`.
 7. **Audit.** Each replay records who ran it, when, which messages and the outcome. It requires the `payments-ops-replay` role.
 
-Messages from `payments-quarantine` are not canonical events yet. Their replay goes through the fixed provider adapter in `payment-intake`, which maps them and publishes them like a new notification. The signature is not checked again: it was verified when the notification was received.
+Messages from `payments-quarantine` are not canonical events yet. Their replay goes through the fixed provider adapter in `payment-intake`, which maps them and publishes them like a new notification. For `INVALID_POLICY_REFERENCE`, the operator supplies the corrected policy number, which is recorded in `replay-audit`. The signature is not checked again: it was verified when the notification was received.
 
 Because the ordering rule decides every write, the order of the replay does not matter. Replaying an `APROBADA` and its `REVERSADA` together always ends as `Refunded`.
 

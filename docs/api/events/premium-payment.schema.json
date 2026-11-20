@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.meridian.example/schemas/events/premium-payment/v1/premium-payment.schema.json",
+  "title": "PremiumPaymentEvent",
+  "description": "Canonical premium payment event (v1), published on the Service Bus topic premium-payment-events. Provider-independent. Never contains payer personal data (names, national ids, emails) or payment tokens. Versioning: the major version is in $id (v1) and in the topic contract; schemaVersion carries major.minor. Minor versions only add optional fields, so consumers must ignore unknown fields. A breaking change is a new major version with its own schema and a parallel publication period.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "paymentKey",
+    "country",
+    "provider",
+    "providerTransactionId",
+    "providerEventId",
+    "policyNumber",
+    "status",
+    "amount",
+    "currency",
+    "statusChangedAt",
+    "receivedAt",
+    "correlationId"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "major.minor of this contract. Any 1.x is valid against this schema.",
+      "type": "string",
+      "pattern": "^1\\.(0|[1-9]\\d*)$",
+      "examples": ["1.0"]
+    },
+    "eventId": {
+      "description": "Deterministic business key of the event (idempotency key): <paymentKey>:<status>, or <paymentKey>:REFUNDED:<amountRefunded> for refunds. Identical for every retry of the same business event.",
+      "type": "string",
+      "maxLength": 120,
+      "pattern": "^(QUETZAL|ANDINA|AUSTRAL)-[A-Za-z0-9_-]+:(PENDING|CAPTURED|FAILED|REFUNDED:\\d+(\\.\\d{2})?)$",
+      "examples": ["ANDINA-TRX-CO-5521907:CAPTURED", "QUETZAL-ch_7Hk2Lm9QpZ:REFUNDED:1250.00"]
+    },
+    "paymentKey": {
+      "description": "<PROVIDER>-<providerTransactionId>. Identity of the payment; written to Premium_Payment__c.Payment_Key__c.",
+      "type": "string",
+      "maxLength": 80,
+      "pattern": "^(QUETZAL|ANDINA|AUSTRAL)-[A-Za-z0-9_-]+$",
+      "examples": ["ANDINA-TRX-CO-5521907"]
+    },
+    "country": {
+      "type": "string",
+      "enum": ["MX", "CO", "CL"]
+    },
+    "provider": {
+      "type": "string",
+      "enum": ["Quetzal", "Andina", "Austral"]
+    },
+    "providerTransactionId": {
+      "description": "Charge, transaction or payment id at the provider.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 70
+    },
+    "providerEventId": {
+      "description": "Provider's id of the notification that produced this event (Quetzal id, Andina notificacion_id, Austral eventId). For traceability only; not an idempotency key.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "policyNumber": {
+      "description": "Normalized policy number, upper case. Its country must match country.",
+      "type": "string",
+      "pattern": "^POL-(MX|CO|CL)-\\d{9}$",
+      "examples": ["POL-CO-000187342"]
+    },
+    "status": {
+      "description": "Canonical lifecycle status. Maps 1:1 to Premium_Payment__c.Status__c (Pending, Captured, Failed, Refunded).",
+      "type": "string",
+      "enum": ["PENDING", "CAPTURED", "FAILED", "REFUNDED"]
+    },
+    "amount": {
+      "description": "Payment amount in the major unit of the currency, as a decimal string (no floating point). Two decimals for MXN and COP; no decimals for CLP.",
+      "type": "string",
+      "pattern": "^\\d{1,14}(\\.\\d{2})?$",
+      "examples": ["185000.00", "45990"]
+    },
+    "amountRefunded": {
+      "description": "Cumulative amount refunded so far, major unit. Required when status is REFUNDED; absent otherwise.",
+      "type": "string",
+      "pattern": "^\\d{1,14}(\\.\\d{2})?$"
+    },
+    "currency": {
+      "description": "ISO 4217, upper case. Must match country.",
+      "type": "string",
+      "enum": ["MXN", "COP", "CLP"]
+    },
+    "statusChangedAt": {
+      "description": "Time of the state change at the provider, UTC.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "receivedAt": {
+      "description": "Time Meridian received the notification, UTC. Used to measure freshness (NFR2).",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "correlationId": {
+      "description": "Created by payment-intake and carried end to end in logs, traces and message properties (NFR7).",
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "allOf": [
+    {
+      "description": "Refunds carry amountRefunded; other statuses do not.",
+      "if": { "properties": { "status": { "const": "REFUNDED" } } },
+      "then": { "required": ["amountRefunded"] },
+      "else": { "not": { "required": ["amountRefunded"] } }
+    },
+    {
+      "description": "Mexico: Quetzal, MXN with two decimals, POL-MX policies.",
+      "if": { "properties": { "country": { "const": "MX" } } },
+      "then": {
+        "properties": {
+          "provider": { "const": "Quetzal" },
+          "currency": { "const": "MXN" },
+          "paymentKey": { "pattern": "^QUETZAL-" },
+          "policyNumber": { "pattern": "^POL-MX-" },
+          "amount": { "pattern": "\\.\\d{2}$" },
+          "amountRefunded": { "pattern": "\\.\\d{2}$" }
+        }
+      }
+    },
+    {
+      "description": "Colombia: Andina, COP with two decimals, POL-CO policies.",
+      "if": { "properties": { "country": { "const": "CO" } } },
+      "then": {
+        "properties": {
+          "provider": { "const": "Andina" },
+          "currency": { "const": "COP" },
+          "paymentKey": { "pattern": "^ANDINA-" },
+          "policyNumber": { "pattern": "^POL-CO-" },
+          "amount": { "pattern": "\\.\\d{2}$" },
+          "amountRefunded": { "pattern": "\\.\\d{2}$" }
+        }
+      }
+    },
+    {
+      "description": "Chile: Austral, CLP without decimals, POL-CL policies.",
+      "if": { "properties": { "country": { "const": "CL" } } },
+      "then": {
+        "properties": {
+          "provider": { "const": "Austral" },
+          "currency": { "const": "CLP" },
+          "paymentKey": { "pattern": "^AUSTRAL-" },
+          "policyNumber": { "pattern": "^POL-CL-" },
+          "amount": { "pattern": "^\\d{1,14}$" },
+          "amountRefunded": { "pattern": "^\\d{1,14}$" }
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "schemaVersion": "1.0",
+      "eventId": "ANDINA-TRX-CO-5521907:CAPTURED",
+      "paymentKey": "ANDINA-TRX-CO-5521907",
+      "country": "CO",
+      "provider": "Andina",
+      "providerTransactionId": "TRX-CO-5521907",
+      "providerEventId": "ntf-8f1c2a77",
+      "policyNumber": "POL-CO-000187342",
+      "status": "CAPTURED",
+      "amount": "185000.00",
+      "currency": "COP",
+      "statusChangedAt": "2026-11-28T19:03:09Z",
+      "receivedAt": "2026-11-28T19:03:11Z",
+      "correlationId": "7f3a0c2e-5d1b-4c8e-9a2f-1b6e0d4c3a21"
+    },
+    {
+      "schemaVersion": "1.0",
+      "eventId": "QUETZAL-ch_7Hk2Lm9QpZ:REFUNDED:1250.00",
+      "paymentKey": "QUETZAL-ch_7Hk2Lm9QpZ",
+      "country": "MX",
+      "provider": "Quetzal",
+      "providerTransactionId": "ch_7Hk2Lm9QpZ",
+      "providerEventId": "evt_01JDQ9W4R6Y2",
+      "policyNumber": "POL-MX-000412785",
+      "status": "REFUNDED",
+      "amount": "1250.00",
+      "amountRefunded": "1250.00",
+      "currency": "MXN",
+      "statusChangedAt": "2026-11-29T17:59:55Z",
+      "receivedAt": "2026-11-29T18:00:03Z",
+      "correlationId": "2b9e4f61-8c3a-4d7e-b1f0-6a5c2d9e8f13"
+    }
+  ]
+}
