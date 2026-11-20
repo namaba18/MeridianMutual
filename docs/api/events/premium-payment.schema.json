@@ -121,10 +121,10 @@
         "properties": {
           "provider": { "const": "Quetzal" },
           "currency": { "const": "MXN" },
-          "paymentKey": { "pattern": "^QUETZAL-" },
-          "policyNumber": { "pattern": "^POL-MX-" },
-          "amount": { "pattern": "\\.\\d{2}$" },
-          "amountRefunded": { "pattern": "\\.\\d{2}$" }
+          "paymentKey": { "type": "string", "pattern":"^QUETZAL-" },
+          "policyNumber": { "type": "string", "pattern":"^POL-MX-" },
+          "amount": { "type": "string", "pattern":"\\.\\d{2}$" },
+          "amountRefunded": { "type": "string", "pattern":"\\.\\d{2}$" }
         }
       }
     },
@@ -135,10 +135,10 @@
         "properties": {
           "provider": { "const": "Andina" },
           "currency": { "const": "COP" },
-          "paymentKey": { "pattern": "^ANDINA-" },
-          "policyNumber": { "pattern": "^POL-CO-" },
-          "amount": { "pattern": "\\.\\d{2}$" },
-          "amountRefunded": { "pattern": "\\.\\d{2}$" }
+          "paymentKey": { "type": "string", "pattern":"^ANDINA-" },
+          "policyNumber": { "type": "string", "pattern":"^POL-CO-" },
+          "amount": { "type": "string", "pattern":"\\.\\d{2}$" },
+          "amountRefunded": { "type": "string", "pattern":"\\.\\d{2}$" }
         }
       }
     },
@@ -149,10 +149,10 @@
         "properties": {
           "provider": { "const": "Austral" },
           "currency": { "const": "CLP" },
-          "paymentKey": { "pattern": "^AUSTRAL-" },
-          "policyNumber": { "pattern": "^POL-CL-" },
-          "amount": { "pattern": "^\\d{1,14}$" },
-          "amountRefunded": { "pattern": "^\\d{1,14}$" }
+          "paymentKey": { "type": "string", "pattern":"^AUSTRAL-" },
+          "policyNumber": { "type": "string", "pattern":"^POL-CL-" },
+          "amount": { "type": "string", "pattern":"^\\d{1,14}$" },
+          "amountRefunded": { "type": "string", "pattern":"^\\d{1,14}$" }
         }
       }
     }
