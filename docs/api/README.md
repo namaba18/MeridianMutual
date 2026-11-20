@@ -47,5 +47,5 @@ The version is expressed in two places: the major version in the schema `$id` (`
 ### 3. Governance
 
 - Contract changes are made in this repository by pull request. Consumer teams are code owners of the event schema and must approve changes to it.
-- CI lints both contracts and compares them with `main`. A breaking change without a major version bump fails the build (Part C).
+- CI lints the OpenAPI contract and compares it with `main`: a breaking change fails the build (oasdiff, Part C). The event schema is compiled in CI, and every change to it needs the consumer teams' approval as code owners.
 - Every provider sample in `reference/providers/` is a contract test: the adapter must accept it and produce an event that is valid against the schema.

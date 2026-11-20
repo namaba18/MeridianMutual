@@ -1,0 +1,28 @@
+# Secret scanning configuration for the CI "Secret scan" gate.
+[extend]
+useDefault = true
+
+# A finding is ignored if its file matches one of the paths OR its line matches one of the regexes.
+#
+# Paths: the assessment ships FICTIONAL sandbox secrets as test vectors
+# (reference/providers/*/WEBHOOK_SPEC.md), PR-214 under review contains a hard-coded secret that the
+# review itself flags (pr-review/), and our tests use the same fictional sandbox secrets.
+#
+# Regexes: known false positives of the generic-api-key rule, matched by exact pattern and never by
+# folder, so a real secret anywhere in docs/ or infra/ still fails the build:
+#   - "paymentKey": the business key of a payment (SOLUTION_DESIGN §3.1), not a credential
+#   - built-in Azure role definition ids: public constants published by Microsoft
+#   - tok_qz_…: the fictional payment token of the Quetzal sample, quoted in the OpenAPI example
+[allowlist]
+description = "Fictional assessment secrets, business keys, public Azure role ids"
+paths = [
+  '''^reference/providers/''',
+  '''^pr-review/''',
+  '''^practical/src/test/''',
+]
+regexTarget = "line"
+regexes = [
+  '''paymentKey''',
+  '''RoleId\s*=\s*'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}''',
+  '''token:\s*tok_qz_[A-Za-z0-9]+''',
+]

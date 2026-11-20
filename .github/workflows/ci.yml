@@ -1,0 +1,164 @@
+# CI: runs on every pull request to main. Every job is a required status check in the branch
+# protection of main, so nothing merges unless all gates pass. Gates and their justification:
+# .github/workflows/README.md
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  # Also on main itself, so main is always known to be green (PR-only gates are skipped there).
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Gate 1: the code compiles and the 107 tests pass (signatures, mapping, duplicates,
+  # durability, quarantine, privacy of logs).
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: practical
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Build and run tests
+        run: ./mvnw -B -ntp verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: practical/target/surefire-reports/
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: payment-intake-jar
+          path: practical/target/payment-intake-*.jar
+          retention-days: 7
+
+  # Gate 2: the image that would be deployed has no fixable HIGH or CRITICAL vulnerabilities.
+  container-scan:
+    name: Container image scan
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: payment-intake-jar
+          path: practical/target
+      - name: Build image
+        run: docker build -t payment-intake:ci practical
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: payment-intake:ci
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # Gate 3: static analysis for security defects in our own code.
+  codeql:
+    name: CodeQL (SAST)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java-kotlin
+          build-mode: none
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v3
+
+  # Gate 4: no new dependency with a known HIGH or CRITICAL vulnerability, and no copyleft licence.
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later
+
+  # Gate 5: no secret is committed (NFR6). The fictional sandbox secrets of the assessment are
+  # allowlisted by path in .gitleaks.toml.
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Gate 6: the contracts are valid, and the webhook contract has no breaking change against main.
+  contracts:
+    name: API contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Lint OpenAPI (Spectral)
+        run: npx --yes @stoplight/spectral-cli@6.11.1 lint docs/api/webhooks.openapi.yaml --fail-severity warn
+      - name: Compile event JSON Schema (draft 2020-12)
+        run: npx --yes -p ajv-cli@5.0.0 -p ajv-formats@3.0.1 ajv compile --spec=draft2020 -c ajv-formats -s docs/api/events/premium-payment.schema.json
+      - name: Breaking changes in the webhook contract (oasdiff)
+        if: github.event_name == 'pull_request'
+        run: |
+          if git cat-file -e "origin/${{ github.base_ref }}:docs/api/webhooks.openapi.yaml" 2>/dev/null; then
+            git show "origin/${{ github.base_ref }}:docs/api/webhooks.openapi.yaml" > "$RUNNER_TEMP/base.yaml"
+            docker run --rm -v "$RUNNER_TEMP:/base" -v "$PWD:/repo" tufin/oasdiff \
+              breaking /base/base.yaml /repo/docs/api/webhooks.openapi.yaml --fail-on ERR
+          else
+            echo "No webhook contract on ${{ github.base_ref }} yet: nothing to compare."
+          fi
+
+  # Gate 7: the infrastructure compiles and passes the strict linter (infra/bicepconfig.json)
+  # for every environment. No Azure access is needed.
+  iac:
+    name: Bicep build and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bicep
+        run: az bicep install
+      - name: Build and lint
+        run: |
+          az bicep build --file infra/main.bicep --stdout > /dev/null
+          az bicep lint --file infra/main.bicep
+      - name: Build parameters of every environment
+        run: |
+          for env in dev test prod; do
+            az bicep build-params --file "infra/params/$env.bicepparam" --stdout > /dev/null
+          done
