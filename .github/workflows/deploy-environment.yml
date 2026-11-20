@@ -43,7 +43,7 @@ jobs:
       PARAMS_FILE: infra/params/${{ inputs.params }}.bicepparam
       IMAGE_TAG: ${{ inputs.image-tag }} # read by the .bicepparam files
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Azure login (OIDC, no secret)
         uses: azure/login@v2
