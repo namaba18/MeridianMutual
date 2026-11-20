@@ -67,7 +67,7 @@ Not drawn, to keep the diagram readable: every Azure service reads its secrets f
 | **salesforce-writer** | Reads events, discards stale ones and upserts `Premium_Payment__c` in batches. |
 | **Cosmos DB** | Status of each notification (received, recorded, skipped, failed, dead-lettered) and latest state of each payment. |
 | **payment-ops** | Lets operations look up a notification by its provider id (FR7). |
-| **Key Vault** | Provider webhook secrets and the Salesforce client secret. |
+| **Key Vault** | Two vaults, split by reader: provider webhook secrets (read only by `payment-intake`) and the Salesforce client secret (read only by `salesforce-writer`). |
 | **Azure Monitor** | Logs, traces and alerts per country, without payer personal data. |
 
 ### 1.2 Trust boundaries

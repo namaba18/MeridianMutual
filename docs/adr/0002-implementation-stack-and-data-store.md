@@ -46,7 +46,7 @@ What drives both decisions:
 
 #### Option S2: Java 21 + Spring Boot 3 on Azure Container Apps
 - Pros:
-  - Runs **inside Azure**: managed identities through `DefaultAzureCredential`, private endpoints and Key Vault references. No secrets in configuration.
+  - Runs **inside Azure**: managed identities through `DefaultAzureCredential`, private endpoints, and Key Vault read at runtime with the app's own identity. No secrets in configuration.
   - First-class Azure SDKs for everything ADR-0001 needs: Service Bus sessions and scheduled messages, Cosmos DB ETag conditional writes and native TTL.
   - Full control of signature verification over raw bytes (`MessageDigest.isEqual` for constant-time comparison).
   - Same language and framework as the squad's prototype, so skills and part of the code can be reused.
