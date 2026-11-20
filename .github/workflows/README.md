@@ -15,7 +15,7 @@ Every gate is a **required status check** in the branch protection of `main` (to
 | # | Gate | Tool | Fails when | Why it is essential here |
 |---|---|---|---|---|
 | 1 | Build and test | Maven Wrapper, JUnit 5 | Compilation or any of the 107 tests fails | The tests encode the business rules that protect customers: signature verification against the official vectors, exactly-once, no loss before `2xx`, quarantine instead of guessing, no personal data in logs |
-| 2 | Container image scan | Trivy | The image has a fixable HIGH or CRITICAL vulnerability | The image is what runs in production; a vulnerable base image is the most common supply-chain risk |
+| 2 | Container image scan | Trivy | The image has a fixable HIGH or CRITICAL vulnerability that is not formally accepted in [`.trivyignore`](../../.trivyignore) (each acceptance has an owner, a reason and an expiry date) | The image is what runs in production. Its first run found 40 vulnerabilities inherited from an old Spring Boot; 39 were fixed by upgrading and 1 was accepted until 2027-03-31 (practical/README.md, gap 9). The result is published in the job summary |
 | 3 | SAST | CodeQL (`security-extended`) | A security finding in our code | Internet-facing webhook code handling payment data (injection, unsafe deserialization, logging of sensitive data) |
 | 4 | Dependency review | GitHub dependency review | A new dependency has a known HIGH/CRITICAL vulnerability or a GPL/AGPL licence | Stops vulnerable libraries **before** they merge, not after an alert |
 | 5 | Secret scan | Gitleaks, full history | A secret is committed outside the allowlisted fictional material | NFR6. PR-214 is exactly this failure: a live secret in `application.yml` |

@@ -1,0 +1,11 @@
+# Vulnerabilities accepted after analysis. Each entry records who accepted it, when, why, and until
+# when: after the expiry date the CI image scan fails again, so an acceptance cannot be forgotten.
+
+# CVE-2026-47884 (CRITICAL), spring-webmvc: remote code execution via improper path limitation in
+# XsltView. Fixed only in Spring Framework 7.0.9 (Spring Boot 4); there is no fix in the 6.2 line.
+# Accepted by: Payments Integration squad, 2026-11-20.
+# Not exploitable here: payment-intake has no view layer. The code defines no XsltView, view
+# resolver or template engine (none are auto-configured), and its endpoints read the body as byte[]
+# and answer empty bodies or application/problem+json.
+# Plan: migrate to Spring Boot 4 before the expiry (technical debt #9 in practical/README.md).
+CVE-2026-47884 exp:2027-03-31

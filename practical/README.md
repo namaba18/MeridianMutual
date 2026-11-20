@@ -9,7 +9,7 @@ It implements the contracts in [`docs/api/`](../docs/api/) and the decisions in 
 | Item | Version |
 |---|---|
 | Java | 21 (built and tested with Microsoft Build of OpenJDK 21.0.13) |
-| Spring Boot | 3.3.5 (web, actuator) |
+| Spring Boot | 3.5.16 (web, actuator), with Tomcat 10.1.62 and Jackson 2.21.8 pinned for security fixes (see `pom.xml`) |
 | Build | Maven 3.9.9 via the Maven Wrapper (`mvnw`): no Maven install needed |
 | JSON Schema validation | `com.networknt:json-schema-validator` 1.5.1 (draft 2020-12) |
 | Tests | JUnit 5, AssertJ, Spring MockMvc |
@@ -135,6 +135,7 @@ In priority order, what I would do next:
 6. **Unreadable bodies.** A body that is not JSON is quarantined with metadata only (no payload, because it cannot be sanitized), so it cannot be replayed from our side. Recovery requires the provider to resend it.
 7. **Duplicates in quarantine.** The duplicate check needs an `eventId`, which a quarantined notification does not have. A provider duplicate of a quarantined notification is quarantined again; the replay tool must group quarantined messages by provider event id before replaying.
 8. **Load test.** The design figures (40/s, about 50 ms per request) are not measured here.
+9. **Migration to Spring Boot 4 (deadline 2027-03-31).** The first CI image scan found 40 HIGH/CRITICAL vulnerabilities, all in dependencies of Spring Boot 3.3.5. Spring Boot 3.5.16 plus pinned Tomcat and Jackson versions fixed 39. The remaining one, CVE-2026-47884 (RCE in `XsltView` of spring-webmvc), is fixed only in Spring Framework 7. It is not exploitable here, because the service has no view layer, so it is accepted in `.trivyignore` until 2027-03-31; after that date the CI scan fails again. The migration (Spring Framework 7, Jackson 3) is the way to close it.
 
 ## Pitfall found while building
 

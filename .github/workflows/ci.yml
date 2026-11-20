@@ -70,7 +70,20 @@ jobs:
           image-ref: payment-intake:ci
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          trivyignores: .trivyignore # accepted findings, each with a reason and an expiry date
+          format: table
+          output: trivy-report.txt
           exit-code: "1"
+      - name: Publish the scan result in the job summary
+        if: always()
+        run: |
+          {
+            echo "## Container image scan (Trivy: HIGH and CRITICAL with a fix available)"
+            echo '```'
+            if [ -s trivy-report.txt ]; then cat trivy-report.txt; else echo "No vulnerabilities found."; fi
+            echo '```'
+            echo "Accepted findings and their expiry dates: see .trivyignore"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Gate 3: static analysis for security defects in our own code.
   codeql:
