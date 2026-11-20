@@ -9,3 +9,12 @@
 # and answer empty bodies or application/problem+json.
 # Plan: migrate to Spring Boot 4 before the expiry (technical debt #9 in practical/README.md).
 CVE-2026-47884 exp:2027-03-31
+
+# CVE-2026-47890 (CRITICAL), spring-webmvc: stream corruption in Server-Sent Events rendered with
+# views. Fixed only in Spring Framework 7.0.9 (Spring Boot 4); there is no fix in the 6.2 line.
+# Accepted by: Payments Integration squad, 2026-11-20.
+# Not exploitable here: the code uses no Server-Sent Events, no streaming responses (SseEmitter,
+# ResponseBodyEmitter, StreamingResponseBody) and no views. Every response is a single, empty or
+# application/problem+json body.
+# Plan: same migration to Spring Boot 4, same expiry.
+CVE-2026-47890 exp:2027-03-31
