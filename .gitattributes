@@ -1,0 +1,8 @@
+# Provider samples are exact raw bodies used as signature test vectors.
+# Any line-ending conversion changes the bytes and breaks every signature check.
+reference/providers/**/samples/*.json -text
+
+# Shell scripts must keep LF to run on Linux CI runners; Windows scripts keep CRLF.
+*.sh   text eol=lf
+mvnw   text eol=lf
+*.cmd  text eol=crlf
