@@ -1,7 +1,7 @@
 # Runtime image for payment-intake. The jar is built and tested by the pipeline before this step
 # (./mvnw verify), so the image only packages an artifact that already passed every test.
 # In a real repository the base image is pinned by digest; Dependabot keeps it current.
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:24-jre-alpine
 
 # Never run as root.
 RUN addgroup -S app && adduser -S app -G app
