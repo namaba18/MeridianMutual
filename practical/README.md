@@ -11,7 +11,7 @@ It implements the contracts in [`docs/api/`](../docs/api/) and the decisions in 
 | Java | 21 (built and tested with Microsoft Build of OpenJDK 21.0.13) |
 | Spring Boot | 3.5.16 (web, actuator), with Tomcat 10.1.62 and Jackson 2.21.8 pinned for security fixes (see `pom.xml`) |
 | Build | Maven 3.9.9 via the Maven Wrapper (`mvnw`): no Maven install needed |
-| JSON Schema validation | `com.networknt:json-schema-validator` 1.5.1 (draft 2020-12) |
+| JSON Schema validation | `com.networknt:json-schema-validator` 1.5.9 (draft 2020-12) |
 | Tests | JUnit 5, AssertJ, Spring MockMvc |
 
 ## How to build and run the tests
