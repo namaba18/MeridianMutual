@@ -47,7 +47,7 @@ No identity can delete Cosmos DB documents (they expire through TTL), and no ser
 
 ## Parameters per environment and per country
 
-**Per country**: the `countries` list. Each entry generates its own Service Bus subscription and filter, writer identity, writer Container App, role assignments, and DLQ and freshness alerts. **Adding a country is adding one entry** (NFR9):
+**Per country**: the `countries` list. Each entry generates its own Service Bus subscription and filter, writer identity, writer Container App, role assignments, and DLQ, quarantine, freshness and stuck-payment alerts. **Adding a country is adding one entry** (NFR9):
 
 ```bicep
 param countries = [
@@ -130,4 +130,4 @@ az deployment group create \
 - **Private DNS zones** are created per environment. In a hub-and-spoke landing zone they would live in the hub and be referenced instead.
 - **NSGs and egress control** for the subnets are not defined. Production would route egress through the platform firewall, with a fixed public IP the Salesforce team can allowlist.
 - **Diagnostic settings** send everything to the platform workspace. Retention and cost of those logs are governed at platform level.
-- **The writer metrics used by alerts** (`writer.records`, `writer.freshness.seconds`, `writer.salesforce.calls.rolling24h`) are a contract for `salesforce-writer`, which is designed but not built.
+- **The writer and ops metrics used by alerts** (`writer.records`, `writer.freshness.seconds`, `writer.salesforce.calls.rolling24h`, `ops.notifications.stuck`) are a contract for `salesforce-writer` and `payment-ops`, which are designed but not built.

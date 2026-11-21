@@ -121,7 +121,7 @@ Not included because they already exist at platform level: the API Manager, the 
 
 | Pillar | How |
 |---|---|
-| Reliability | Alerts per country and a platform-level DLQ alert that does not depend on our own telemetry |
+| Reliability | Alerts per country and platform-level DLQ and quarantine alerts that do not depend on our own telemetry |
 | Security | Ingestion with Entra ID only (`DisableLocalAuth`); payer personal data is never sent |
 | Cost | Ingestion is the cost driver: sample successful request traces, keep every failure |
 | Operational excellence | Two routes: page for payments at risk now, notify for the working day |

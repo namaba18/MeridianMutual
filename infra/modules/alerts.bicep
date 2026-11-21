@@ -9,6 +9,9 @@
 //   writer.records{country,outcome}                 emitted by salesforce-writer (design contract)
 //   writer.freshness.seconds{country}               receivedAt -> recorded in Salesforce
 //   writer.salesforce.calls.rolling24h              the budget guard's own counter
+//   ops.notifications.stuck{country}                payment-ops, every 15 min: accepted payments still
+//                                                   RECEIVED or FAILED more than 1 hour after receivedAt
+// Runbook and alert catalogue: docs/operations/OPERATIONS.md
 
 param baseName string
 
@@ -17,6 +20,7 @@ param countries array
 
 param appInsightsId string
 param serviceBusNamespaceId string
+param quarantineQueueName string
 param cosmosAccountId string
 
 @description('Email (or paging-tool address) of the on-call rotation.')
@@ -133,6 +137,86 @@ resource freshness 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for c 
           failingPeriods: {
             numberOfEvaluationPeriods: 2
             minFailingPeriodsToAlert: 2
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [
+        page.id
+      ]
+    }
+  }
+}]
+
+// Any authentic notification of a country sent to quarantine: the payment does not reach Salesforce
+// until it is replayed (SOLUTION_DESIGN §5.2). An Andina format change like INC-0412 lands here.
+resource quarantined 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for c in countries: {
+  name: 'alert-${baseName}-quarantine-${toLower(c.code)}'
+  location: resourceGroup().location
+  tags: tags
+  properties: {
+    displayName: 'Payments ${c.code}: notifications quarantined'
+    description: 'payment-intake quarantined at least one ${c.provider} notification (unknown state, unreadable payload or policy reference that cannot be normalized). Check the reason in the Payment Ops API.'
+    severity: 2
+    enabled: enabled
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    scopes: [
+      appInsightsId
+    ]
+    criteria: {
+      allOf: [
+        {
+          query: 'customMetrics | where name == "intake.notifications" | where tostring(customDimensions.provider) == "${c.provider}" and tostring(customDimensions.outcome) == "QUARANTINED" | summarize notifications = sum(valueSum)'
+          timeAggregation: 'Total'
+          metricMeasureColumn: 'notifications'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
+          }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: {
+      actionGroups: [
+        page.id
+      ]
+    }
+  }
+}]
+
+// Accepted payments still not in Salesforce 1 hour after they were received: the 1-hour freshness
+// target (NFR2) is being missed and, if nobody acts, a payment could be lost (NFR3).
+resource stuck 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for c in countries: {
+  name: 'alert-${baseName}-stuck-${toLower(c.code)}'
+  location: resourceGroup().location
+  tags: tags
+  properties: {
+    displayName: 'Payments ${c.code}: accepted payments not in Salesforce after 1 hour'
+    description: 'payment-ops found ${c.code} payments still RECEIVED or FAILED more than 1 hour after they were accepted. Usually a long Salesforce outage or a stopped writer.'
+    severity: 2
+    enabled: enabled
+    evaluationFrequency: 'PT15M'
+    windowSize: 'PT15M'
+    scopes: [
+      appInsightsId
+    ]
+    criteria: {
+      allOf: [
+        {
+          query: 'customMetrics | where name == "ops.notifications.stuck" | where tostring(customDimensions.country) == "${c.code}" | summarize stuck = max(valueMax)'
+          timeAggregation: 'Maximum'
+          metricMeasureColumn: 'stuck'
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: {
+            numberOfEvaluationPeriods: 1
+            minFailingPeriodsToAlert: 1
           }
         }
       ]
@@ -276,13 +360,14 @@ resource apiBudget 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
 
 // ---------------------------------------------------------------- platform metrics
 
-// Safety net independent of our own telemetry: anything in a dead-letter queue or in quarantine.
+// Safety nets independent of our own telemetry (they still fire if the application metrics stop).
+// 1. Anything in any dead-letter queue of the namespace.
 resource brokerDeadLetters 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: 'alert-${baseName}-servicebus-deadletters'
   location: 'global'
   tags: tags
   properties: {
-    description: 'Messages in a dead-letter queue of the topic subscriptions or the quarantine queue, independent of application telemetry.'
+    description: 'Messages in any dead-letter queue of the namespace, independent of application telemetry.'
     severity: 2
     enabled: enabled
     scopes: [
@@ -304,6 +389,53 @@ resource brokerDeadLetters 'Microsoft.Insights/metricAlerts@2018-03-01' = {
               operator: 'Include'
               values: [
                 '*'
+              ]
+            }
+          ]
+          operator: 'GreaterThan'
+          threshold: 0
+          timeAggregation: 'Maximum'
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: [
+      {
+        actionGroupId: notify.id
+      }
+    ]
+  }
+}
+
+// 2. Anything waiting in the quarantine queue. Quarantined messages are active messages, not
+//    dead-lettered ones, so the alert above does not see them.
+resource quarantineNotEmpty 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'alert-${baseName}-servicebus-quarantine'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'Messages waiting in ${quarantineQueueName}, independent of application telemetry.'
+    severity: 2
+    enabled: enabled
+    scopes: [
+      serviceBusNamespaceId
+    ]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'quarantined'
+          metricNamespace: 'Microsoft.ServiceBus/namespaces'
+          metricName: 'ActiveMessages'
+          dimensions: [
+            {
+              name: 'EntityName'
+              operator: 'Include'
+              values: [
+                quarantineQueueName
               ]
             }
           ]

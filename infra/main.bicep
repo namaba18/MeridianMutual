@@ -304,6 +304,7 @@ module alertsModule 'modules/alerts.bicep' = {
     countries: countries
     appInsightsId: monitoringModule.outputs.appInsightsId
     serviceBusNamespaceId: serviceBusModule.outputs.namespaceId
+    quarantineQueueName: serviceBusModule.outputs.quarantineQueueName
     cosmosAccountId: cosmosModule.outputs.accountId
     pageEmail: alerting.pageEmail
     notifyEmail: alerting.notifyEmail
