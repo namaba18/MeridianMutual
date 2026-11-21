@@ -50,7 +50,7 @@ What drives both decisions:
   - First-class Azure SDKs for everything ADR-0001 needs: Service Bus sessions and scheduled messages, Cosmos DB ETag conditional writes and native TTL.
   - Full control of signature verification over raw bytes (`MessageDigest.isEqual` for constant-time comparison).
   - Same language and framework as the squad's prototype, so skills and part of the code can be reused.
-  - Container Apps provides **KEDA scaling on Service Bus queue length**, internal-only ingress in a VNet and minimum replicas (no cold start). Billing is per use, so the cost follows the month-end peaks.
+  - Container Apps provides scaling rules, internal-only ingress in a VNet and minimum replicas (no cold start). `payment-intake` scales on HTTP concurrency. The writers run with a fixed replica count, because Salesforce, not compute, bounds their throughput (SOLUTION_DESIGN §6.3). Billing is per use, so the cost follows the month-end peaks.
   - JUnit 5 and Testcontainers run in any CI without special credentials.
 - Cons:
   - **Deviates from Meridian's reference stack.** The integration platform team does not run it, so the squad owns runtime, patching and on-call for these services.
@@ -147,6 +147,6 @@ The platform rule is still respected: every API is published through the API Man
 | Risk | Mitigation |
 |---|---|
 | The integration platform team does not support Container Apps services | Agree on ownership up front. The services are published and governed through the API Manager like any other API. Runbooks live in `docs/operations/`. |
-| Provider adapters drift between countries | One `ProviderAdapter` interface (verify, map) with contract tests driven by each provider's samples and test vectors. Adding a country means adding an adapter, not changing the flow (NFR9). |
+| Provider adapters drift between countries | Each provider adapter implements the same two interfaces, `SignatureVerifier` and `PayloadMapper`, with contract tests driven by that provider's samples and test vectors. Adding a country means adding an adapter, not changing the flow (NFR9). |
 | An unexpected Cosmos DB query pattern causes RU spikes | Indexing limited to the paths used by FR7, `payment-state` with indexing off, an autoscale ceiling and an alert on throttling (`429`). |
 | Lock-in to Cosmos DB | The store is behind repository interfaces, and the data is small and short-lived (180–400 days), so a migration would be cheap. |

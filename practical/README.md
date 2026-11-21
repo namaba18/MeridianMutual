@@ -23,7 +23,7 @@ Requires only a JDK 21 (`JAVA_HOME` set). From this folder:
 .\mvnw.cmd verify      # Windows
 ```
 
-`verify` compiles, runs the **107 tests** and packages the jar. Reports are in `target/surefire-reports/`.
+`verify` compiles, runs the **112 tests** and packages the jar. Reports are in `target/surefire-reports/`.
 
 Run one class or one method:
 
@@ -58,11 +58,15 @@ sequenceDiagram
         S-->>P: 401
     end
     S->>M: map to canonical event
-    alt unknown state / bad payload / bad policy reference
-        S->>S: quarantine (allowlisted fields only)
-        S-->>P: 200
-    end
     S->>S: validate against premium-payment.schema.json
+    alt cannot be mapped (unknown or missing state / unsupported version / bad payload / bad policy reference) or breaks the schema
+        S->>S: quarantine (allowlisted fields only)
+        alt quarantine queue down
+            S-->>P: 503 + Retry-After
+        else
+            S-->>P: 200
+        end
+    end
     S->>N: eventId already received?
     alt duplicate
         S-->>P: 200 (nothing published)
@@ -102,12 +106,12 @@ src/main/java/com/meridian/payments/intake/
 |---|---|---|
 | **FR1** authenticity | All 7 official test vectors accepted; a changed byte, a wrong secret, the same JSON with CRLF line endings, a re-formatted Andina timestamp, an expired or future timestamp (exact boundaries), and missing or malformed headers are rejected; secret rotation works on both sides | `QuetzalSignatureVerifierTest`, `AndinaSignatureVerifierTest` |
 | **FR2** canonical event | Every sample maps to an event that is **valid against the published JSON Schema**; centavos → major unit, `mxn` → `MXN`, Unix and `-05:00` → UTC; refunds carry the cumulative amount | `QuetzalPayloadMapperTest`, `AndinaPayloadMapperTest`, `PremiumPaymentEventTest` |
-| **FR2** never guess | Unknown states, references that cannot be normalized, wrong currency, bad amounts and non-JSON bodies are quarantined, never defaulted; the INC-0412 references (`000215560`, `pol-co-000198004`) are normalized | same as above |
+| **FR2** never guess | Unknown states (`UNKNOWN_PROVIDER_STATUS`), missing states (`INVALID_PAYLOAD`), Quetzal API versions other than `2025-06-01` (`UNSUPPORTED_PROVIDER_VERSION`), references that cannot be normalized, wrong currency, bad amounts and non-JSON bodies are quarantined, never defaulted; the INC-0412 references (`000215560`, `pol-co-000198004`) are normalized | same as above |
 | **FR4** exactly once | Andina's retry (new `notificacion_id`) and Quetzal's redelivery (same `id`) are answered 200 and **not** published again; 8 identical deliveries in parallel, or with the store down, still produce one message (broker duplicate detection) | `IntakeServiceTest$Duplicates`, `WebhookControllerTest` |
-| **NFR3** no loss | 200 only after the publish; broker down → 503 and nothing marked as received, so the provider's retry is accepted later; a failure after publishing still answers 200; a defect in our code answers 500, never 200 | `IntakeServiceTest$Durability`, `WebhookControllerErrorTest` |
+| **NFR3** no loss | 200 only after the publish (or after the quarantine write); broker or quarantine queue down → 503 and nothing marked as received, so the provider's retry is accepted later; a failure after publishing still answers 200; a defect in our code answers 500, never 200 | `IntakeServiceTest$Durability`, `WebhookControllerErrorTest` |
 | Producer strict | An event that passes the mapper but breaks the schema (a defect) is quarantined, never published | `IntakeServiceTest$Quarantine` |
 | **NFR4** timeouts | Over the 3 s internal deadline → 503 before the provider times out | `IntakeServiceTest$Durability` |
-| **NFR6** privacy | Event and logs never contain payer name, national id, email or policy number (logs are captured and checked); quarantine keeps allowlisted fields only; error messages never quote values; secrets only from the environment, with a rotation pair | `IntakeServiceTest`, `*PayloadMapperTest`, `PremiumPaymentEventTest`, `ConfiguredSecretProviderTest` |
+| **NFR6** privacy | Event and logs never contain payer name, national id, email or policy number (logs are captured and checked); quarantine keeps allowlisted fields only; error messages never quote values; the API Manager's request id is logged only if it looks like an id; secrets only from the environment, with a rotation pair | `IntakeServiceTest`, `*PayloadMapperTest`, `PremiumPaymentEventTest`, `ConfiguredSecretProviderTest` |
 | HTTP contract | 200 + `X-Correlation-Id`, 401/503 as `problem+json`, `Retry-After`, 413 over 256 KB, 404 for providers not in v1, raw bytes preserved through Spring | `WebhookControllerTest` |
 
 ## What is stubbed and how
@@ -117,7 +121,7 @@ Nothing external is called. Every external system is behind a port in `port/`, w
 | Port | Stub | Emulates | Production implementation (not built) |
 |---|---|---|---|
 | `EventPublisher` | `InMemoryEventPublisher` | Service Bus topic: **duplicate detection by `messageId`**, and outages | `azure-messaging-servicebus` sender to `premium-payment-events`, `DefaultAzureCredential` (managed identity, Data Sender role), send timeout within the 3 s budget |
-| `QuarantinePublisher` | `InMemoryQuarantinePublisher` | `payments-quarantine` queue, and outages | Service Bus sender to `payments-quarantine` |
+| `QuarantinePublisher` | `InMemoryQuarantinePublisher` | `payments-quarantine` queue, and outages | Service Bus sender to `payments-quarantine`, with the provider, the provider ids and the reason as message properties, so `payment-ops` can find a message by peeking the queue (SOLUTION_DESIGN §5.2) |
 | `NotificationStore` | `InMemoryNotificationStore` | Cosmos DB `notifications` (status + attempts, SOLUTION_DESIGN §7.2), and outages | `azure-cosmos` with point read/create by `id` + partition key `paymentKey`, patch to append attempts |
 | `SecretProvider` | `ConfiguredSecretProvider` | Secrets from **environment variables** only (`INTAKE_WEBHOOKSECRETS_<PROVIDER>_<n>`) | `azure-security-keyvault-secrets` with a managed identity, cached in memory with a short TTL so rotations are picked up |
 
@@ -127,15 +131,16 @@ The tests use the **fictional sandbox secrets** published in each `WEBHOOK_SPEC.
 
 In priority order, what I would do next:
 
-1. **Real Azure adapters.** Service Bus, Cosmos DB and Key Vault implementations of the ports, selected by Spring profile, with integration tests against the Service Bus and Cosmos DB emulators (Testcontainers).
-2. **Austral (CL).** Not in scope for Part B. It needs a verifier (hex HMAC of the body, no timestamp, so replay protection relies on `eventId`), a mapper and an endpoint.
-3. **Timeouts inside the adapters.** The 3 s deadline is checked before publishing; real clients also need per-call timeouts derived from the remaining budget.
-4. **OpenAPI conformance test.** Status codes and headers are tested by hand against the contract. An automated check (for example a contract-test plugin) and a linter belong in CI (Part C).
-5. **Observability.** Logs are `key=value` text and a Micrometer counter `intake.notifications{provider,outcome,reason}`. Production needs JSON logs, OpenTelemetry traces exported to Application Insights with the `correlationId`, and freshness metrics (`receivedAt` → recorded) per country.
-6. **Unreadable bodies.** A body that is not JSON is quarantined with metadata only (no payload, because it cannot be sanitized), so it cannot be replayed from our side. Recovery requires the provider to resend it.
-7. **Duplicates in quarantine.** The duplicate check needs an `eventId`, which a quarantined notification does not have. A provider duplicate of a quarantined notification is quarantined again; the replay tool must group quarantined messages by provider event id before replaying.
-8. **Load test.** The design figures (40/s, about 50 ms per request) are not measured here.
-9. **Migration to Spring Boot 4 (deadline 2027-03-31).** The first CI image scan found 40 HIGH/CRITICAL vulnerabilities, all in dependencies of Spring Boot 3.3.5. Spring Boot 3.5.16 plus pinned Tomcat and Jackson versions fixed 39. The remaining one, CVE-2026-47884 (RCE in `XsltView`), and one reported by the next scan on the upgraded version, CVE-2026-47890 (stream corruption in Server-Sent Events with views), are both in spring-webmvc and fixed only in Spring Framework 7. Neither is exploitable here, because the service has no view layer and no streaming responses, so both are accepted in `.trivyignore` until 2027-03-31; after that date the CI scan fails again. New spring-webmvc fixes are only being released for Spring Framework 7, which makes this migration (Spring Framework 7, Jackson 3) the top item of technical debt.
+1. **Real Azure adapters.** Service Bus, Cosmos DB and Key Vault implementations of the ports, selected by Spring profile, with integration tests against the Service Bus and Cosmos DB emulators (Testcontainers). One of them kills the service right after a `2xx` and checks that the message is in the queue (ADR-0003).
+2. **API Manager token.** SOLUTION_DESIGN §1.2 says the API Manager calls `payment-intake` with a machine-to-machine token from the IdP. The service does not validate it yet: today only the private network and the ingress restricted to the gateway's subnet (`infra/`) protect it. Next step: Spring Security as an OAuth 2.0 resource server, checking issuer, audience and expiry before the signature check, and answering `401` without a token.
+3. **Austral (CL).** Not in scope for Part B. It needs a verifier (hex HMAC of the body, no timestamp, so replay protection relies on `eventId`), a mapper and an endpoint.
+4. **Timeouts inside the adapters.** The 3 s deadline is checked before publishing; real clients also need per-call timeouts derived from the remaining budget.
+5. **OpenAPI conformance test.** Status codes and headers are tested by hand against the contract. CI lints the contract (Spectral) and blocks breaking changes (oasdiff), but no automated test checks that the service's answers conform to it. A contract-test plugin would close that gap.
+6. **Observability.** Logs are `key=value` text (with the `correlationId` and the API Manager's `X-Request-Id`) and a Micrometer counter `intake.notifications{provider,outcome,reason}`. Production needs JSON logs, OpenTelemetry traces exported to Application Insights with the `correlationId`, and freshness metrics (`receivedAt` → recorded) per country.
+7. **Unreadable bodies.** A body that is not JSON is quarantined with metadata only (no payload, because it cannot be sanitized), so it cannot be replayed from our side. Recovery requires the provider to resend it (assumption 13 in `docs/ASSUMPTIONS.md`).
+8. **Duplicates in quarantine.** The duplicate check needs an `eventId`, which a quarantined notification does not have. A provider duplicate of a quarantined notification is quarantined again; the replay tool must group quarantined messages by provider event id before replaying.
+9. **Load test.** The design figures (40/s, about 50 ms per request) are not measured here.
+10. **Migration to Spring Boot 4 (deadline 2027-03-31).** The first CI image scan found 40 HIGH/CRITICAL vulnerabilities, all in dependencies of Spring Boot 3.3.5. Spring Boot 3.5.16 plus pinned Tomcat and Jackson versions fixed 39. The remaining one, CVE-2026-47884 (RCE in `XsltView`), and one reported by the next scan on the upgraded version, CVE-2026-47890 (stream corruption in Server-Sent Events with views), are both in spring-webmvc and fixed only in Spring Framework 7. Neither is exploitable here, because the service has no view layer and no streaming responses, so both are accepted in `.trivyignore` until 2027-03-31; after that date the CI scan fails again. New spring-webmvc fixes are only being released for Spring Framework 7, which makes this migration (Spring Framework 7, Jackson 3) the top item of technical debt.
 
 ## Pitfall found while building
 

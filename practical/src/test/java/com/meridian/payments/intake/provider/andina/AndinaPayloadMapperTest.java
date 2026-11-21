@@ -91,6 +91,15 @@ class AndinaPayloadMapperTest {
     }
 
     @Test
+    void missingEstadoIsQuarantinedAsInvalidPayloadNotDefaulted() {
+        Unmappable result = unmappable(sample("02-transaccion-aprobada.json").replace("\"estado\": \"APROBADA\",", ""));
+
+        assertThat(result.reason()).isEqualTo(QuarantineReason.INVALID_PAYLOAD);
+        assertThat(result.detail()).contains("/transaccion/estado");
+        assertThat(result.providerEventId()).isEqualTo("ntf-8f1c2a77");
+    }
+
+    @Test
     void quarantinedPayloadKeepsNoPayerData() {
         Unmappable result = unmappable(sample("02-transaccion-aprobada.json").replace("APROBADA", "EN_DISPUTA"));
 

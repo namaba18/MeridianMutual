@@ -365,6 +365,23 @@ class IntakeServiceTest {
     }
 
     @Test
+    void gatewayRequestIdIsLoggedNextToTheCorrelationIdOnlyWhenItLooksLikeAnId(CapturedOutput output) {
+        intake.handle(Provider.ANDINA, new WebhookRequest(Samples.andina("02-transaccion-aprobada.json"), Map.of(
+                "X-Andina-Timestamp", "2026-11-28T14:03:11-05:00",
+                "X-Andina-Signature", "MFQjfviySi6CjqbWtQcy5spKtXxHIxAvmg5W3PTzPJk=",
+                "X-Request-Id", "apim-7f3a0c2e-0001")));
+        intake.handle(Provider.ANDINA, new WebhookRequest(Samples.andina("03-transaccion-aprobada-reintento.json"), Map.of(
+                "X-Andina-Timestamp", "2026-11-28T14:08:11-05:00",
+                "X-Andina-Signature", "CNu6m5X6B9bMKTsi/IzZfGquIh/KdxTyesBtL4ax424=",
+                "X-Request-Id", "x outcome=ACCEPTED\nforged")));
+
+        assertThat(output.getAll())
+                .containsPattern("correlationId=[0-9a-f-]{36} requestId=apim-7f3a0c2e-0001 outcome=ACCEPTED")
+                .contains("requestId=- outcome=DUPLICATE")
+                .doesNotContain("forged");
+    }
+
+    @Test
     void outcomesAreCountedPerProviderForMonitoring() {
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
         IntakeService measured = new IntakeService(

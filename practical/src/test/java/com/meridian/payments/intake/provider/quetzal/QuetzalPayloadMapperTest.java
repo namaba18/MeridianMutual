@@ -80,6 +80,33 @@ class QuetzalPayloadMapperTest {
     }
 
     @Test
+    void missingEventTypeIsQuarantinedAsInvalidPayloadNotGuessed() {
+        Unmappable result = unmappable(sample("01-charge-succeeded.json").replace("\"type\": \"charge.succeeded\",", ""));
+
+        assertThat(result.reason()).isEqualTo(QuarantineReason.INVALID_PAYLOAD);
+        assertThat(result.detail()).contains("/type");
+        assertThat(result.providerEventId()).isEqualTo("evt_01JDQ3K8M2X7");
+    }
+
+    @Test
+    void otherApiVersionIsQuarantinedNotMappedWithTheOldMeaning() {
+        Unmappable result = unmappable(sample("01-charge-succeeded.json")
+                .replace("\"api_version\": \"2025-06-01\"", "\"api_version\": \"2026-09-01\""));
+
+        assertThat(result.reason()).isEqualTo(QuarantineReason.UNSUPPORTED_PROVIDER_VERSION);
+        assertThat(result.providerEventId()).isEqualTo("evt_01JDQ3K8M2X7");
+        assertThat(result.sanitizedPayload().at("/api_version").asText()).isEqualTo("2026-09-01");
+    }
+
+    @Test
+    void missingApiVersionIsQuarantinedNotAssumed() {
+        Unmappable result = unmappable(sample("01-charge-succeeded.json").replace("\"api_version\": \"2025-06-01\",", ""));
+
+        assertThat(result.reason()).isEqualTo(QuarantineReason.UNSUPPORTED_PROVIDER_VERSION);
+        assertThat(result.providerTransactionId()).isEqualTo("ch_7Hk2Lm9QpZ");
+    }
+
+    @Test
     void quarantinedPayloadKeepsNoPayerDataNorPaymentToken() {
         Unmappable result = unmappable(sample("01-charge-succeeded.json")
                 .replace("charge.succeeded", "charge.disputed"));

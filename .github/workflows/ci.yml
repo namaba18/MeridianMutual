@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Gate 1: the code compiles and the 107 tests pass (signatures, mapping, duplicates,
+  # Gate 1: the code compiles and the 112 tests pass (signatures, mapping, duplicates,
   # durability, quarantine, privacy of logs).
   build-and-test:
     name: Build and test

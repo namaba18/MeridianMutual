@@ -7,6 +7,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,6 +51,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 public class IntakeService {
 
     private static final Logger log = LoggerFactory.getLogger(IntakeService.class);
+
+    static final String REQUEST_ID_HEADER = "X-Request-Id";
+    private static final Pattern SAFE_REQUEST_ID = Pattern.compile("^[A-Za-z0-9._:-]{1,128}$");
 
     private final Map<Provider, SignatureVerifier> verifiers = new EnumMap<>(Provider.class);
     private final Map<Provider, PayloadMapper> mappers = new EnumMap<>(Provider.class);
@@ -95,9 +99,21 @@ public class IntakeService {
                 "provider", provider.displayName(),
                 "outcome", result.outcome().name(),
                 "reason", result.reason()).increment();
-        log.info("intake provider={} correlationId={} outcome={} reason={} status={}",
-                provider.displayName(), correlationId, result.outcome(), result.reason(), result.outcome().httpStatus());
+        log.info("intake provider={} correlationId={} requestId={} outcome={} reason={} status={}",
+                provider.displayName(), correlationId, gatewayRequestId(request),
+                result.outcome(), result.reason(), result.outcome().httpStatus());
         return result;
+    }
+
+    /**
+     * The API Manager's request id (assumption 8), logged next to the correlationId so gateway and
+     * application logs can be joined (OPERATIONS.md). It comes from outside, so it is logged only if
+     * it looks like an id: anything else could forge log lines or carry data, and is logged as "-".
+     */
+    static String gatewayRequestId(WebhookRequest request) {
+        return request.header(REQUEST_ID_HEADER)
+                .filter(id -> SAFE_REQUEST_ID.matcher(id).matches())
+                .orElse("-");
     }
 
     private IntakeResult process(Provider provider, WebhookRequest request, String correlationId, Instant receivedAt) {

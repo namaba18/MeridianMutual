@@ -15,7 +15,9 @@ Providers change on their own schedule. Andina API 2.3 changed the format of `re
 
 - **Unknown fields are ignored.** Payloads are `additionalProperties: true`, so a new field like Andina's `canal` changes nothing.
 - **States are not enums.** An unknown `type` or `estado` is not rejected: it is accepted and quarantined, and an alert fires (SOLUTION_DESIGN §3.4).
-- **Provider versions are absorbed by the adapter.** A new provider API version is handled inside that provider's adapter, so the canonical event and the rest of the flow do not change (NFR9).
+- **Provider versions are absorbed by the adapter.** A new provider API version is handled inside that provider's adapter, so the canonical event and the rest of the flow do not change (NFR9). An adapter never maps a version it was not built for, because a field can change its meaning without changing its shape:
+  - Quetzal sends `api_version` in every event. The adapter maps only `2025-06-01`; any other version, or none, is quarantined with reason `UNSUPPORTED_PROVIDER_VERSION` until the adapter supports it, then replayed (SOLUTION_DESIGN §3.4).
+  - Andina sends no version, and a new version takes effect on a cut-over date. Its adapter accepts the old and the new format of a field at the same time, as it does for `referencia` since API 2.3.
 - **Secret rotation without downtime.** Each adapter accepts the current and the next secret during a rotation window. Quetzal already sends several `v1` signatures for this.
 - **Our own side is versioned in the path (`/v1/webhooks/...`).** Changing what we answer (status codes, timeouts, required headers) is a breaking change for a provider: it is published as `/v2/...` and each provider migrates when ready, while `/v1` keeps working.
 - **Watching for changes:** the squad follows each provider's changelog, and every new sample or test vector is added to the contract tests.

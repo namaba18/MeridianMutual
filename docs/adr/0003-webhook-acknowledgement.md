@@ -65,7 +65,7 @@ The intake sequence and its time budget, against Andina's 5 s:
 | Step | Typical time | On failure |
 |---|---|---|
 | 1. Verify signature and timestamp | < 5 ms | `401`, nothing stored |
-| 2. Map to the canonical event | < 5 ms | Unknown state or unreadable payload: quarantine, `200` (SOLUTION_DESIGN §3.4) |
+| 2. Map to the canonical event and validate it against the schema | < 5 ms | Unknown or missing state, unsupported provider version, unreadable payload, policy reference that cannot be normalized, or an event that breaks the schema: quarantine, `200` (SOLUTION_DESIGN §3.4, §3.5). If the quarantine queue is unavailable: `503`, the provider retries. |
 | 3. Look up `eventId` in Cosmos DB | ≈ 10 ms | Duplicate: `200`, nothing published |
 | 4. **Publish to Service Bus** (`messageId = eventId`) | ≈ 20–50 ms | `503`, the provider retries |
 | 5. Save status `RECEIVED` in Cosmos DB | ≈ 10 ms | Logged and still answered `200`: the event is already durable, and `salesforce-writer` creates the missing status document |
@@ -91,4 +91,4 @@ The intake sequence and its time budget, against Andina's 5 s:
 |---|---|
 | A Service Bus outage longer than Andina's retry window | Service Bus Premium is zone-redundant, with an SLA of 99.9%. Alert on any `503` rate above normal. If an outage happens anyway, Andina's 24 h of retries is the safety net, and the provider's dashboard is the reconciliation source afterwards. |
 | Slow Azure calls push the answer over 5 s | Internal deadline of 3 s, client timeouts on every call, an alert on p95 intake latency, and minimum replicas so there is no cold start. |
-| Someone re-introduces "answer first, process later" | This ADR, a code-review checklist item, and an integration test that kills the service after the `2xx` and checks the message is in the queue. |
+| Someone re-introduces "answer first, process later" | This ADR, a code-review checklist item, and the tests that check no `2xx` is returned before the publish (`IntakeServiceTest$Durability`). An integration test that kills the service after the `2xx` and checks the message is in the queue is planned with the real Azure adapters (`practical/README.md`, known gaps). |

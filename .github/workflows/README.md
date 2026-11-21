@@ -14,8 +14,8 @@ Every gate is a **required status check** in the branch protection of `main` (to
 
 | # | Gate | Tool | Fails when | Why it is essential here |
 |---|---|---|---|---|
-| 1 | Build and test | Maven Wrapper, JUnit 5 | Compilation or any of the 107 tests fails | The tests encode the business rules that protect customers: signature verification against the official vectors, exactly-once, no loss before `2xx`, quarantine instead of guessing, no personal data in logs |
-| 2 | Container image scan | Trivy | The image has a fixable HIGH or CRITICAL vulnerability that is not formally accepted in [`.trivyignore`](../../.trivyignore) (each acceptance has an owner, a reason and an expiry date) | The image is what runs in production. Its first run found 40 vulnerabilities inherited from an old Spring Boot; upgrading fixed 39. The remaining one and a new one reported on the upgraded version are fixed only in Spring Framework 7 and are not exploitable here, so both were accepted until 2027-03-31 (practical/README.md, gap 9). The result is published in the job summary |
+| 1 | Build and test | Maven Wrapper, JUnit 5 | Compilation or any of the 112 tests fails | The tests encode the business rules that protect customers: signature verification against the official vectors, exactly-once, no loss before `2xx`, quarantine instead of guessing, no personal data in logs |
+| 2 | Container image scan | Trivy | The image has a fixable HIGH or CRITICAL vulnerability that is not formally accepted in [`.trivyignore`](../../.trivyignore) (each acceptance has an owner, a reason and an expiry date) | The image is what runs in production. Its first run found 40 vulnerabilities inherited from an old Spring Boot; upgrading fixed 39. The remaining one and a new one reported on the upgraded version are fixed only in Spring Framework 7 and are not exploitable here, so both were accepted until 2027-03-31 (practical/README.md, gap 10). The result is published in the job summary |
 | 3 | SAST | CodeQL (`security-extended`) | A security finding in our code | Internet-facing webhook code handling payment data (injection, unsafe deserialization, logging of sensitive data) |
 | 4 | Dependency review | GitHub dependency review | A new dependency has a known HIGH/CRITICAL vulnerability or a GPL/AGPL licence | Stops vulnerable libraries **before** they merge, not after an alert |
 | 5 | Secret scan | Gitleaks, full history | A secret is committed outside the allowlisted fictional material | NFR6. PR-214 is exactly this failure: a live secret in `application.yml` |
@@ -27,7 +27,7 @@ Every gate is a **required status check** in the branch protection of `main` (to
 - **DAST against a running instance:** the services are internal; a dynamic scan belongs to the test environment, not to every pull request.
 - **Load tests:** they run in the test environment, which has the prod Cosmos DB ceiling (infra/README.md).
 
-**Supply chain:** Dependabot ([`../dependabot.yml`](../dependabot.yml)) opens weekly pull requests for Maven dependencies, the base image and the actions themselves, and each one goes through the same gates. In a production repository, actions are also pinned by commit SHA rather than tag.
+**Supply chain:** Dependabot ([`../dependabot.yml`](../dependabot.yml)) opens monthly, grouped pull requests for Maven dependencies, the base image and the actions themselves, and each one goes through the same gates. Major versions are not proposed automatically, because moving to Spring Boot 4 or a new Java release is a planned change; security updates are always proposed. In a production repository, actions are also pinned by commit SHA rather than tag.
 
 ## CD: dev → test → prod
 

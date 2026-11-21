@@ -23,11 +23,18 @@ import com.meridian.payments.intake.provider.PolicyNumbers;
 import com.meridian.payments.intake.provider.QuarantineReason;
 
 /**
- * Quetzal Pagos (MX) to canonical event (SOLUTION_DESIGN §3.3, §3.4).
+ * Quetzal Pagos (MX), API version {@code 2025-06-01}, to canonical event (SOLUTION_DESIGN §3.3, §3.4).
  * Amounts arrive as integers in centavos; currency in lower case; times in Unix seconds.
  */
 @Component
 public class QuetzalPayloadMapper implements PayloadMapper {
+
+    /**
+     * The only Quetzal API version this adapter maps. A new version could change what a field
+     * means (for example the unit of {@code amount}) without changing its shape, so any other
+     * version, or none, is quarantined instead of mapped (docs/api/README.md, assumption 14).
+     */
+    static final String SUPPORTED_API_VERSION = "2025-06-01";
 
     /** Fields kept in quarantine. {@code customer} and {@code payment_method} are never kept. */
     private static final String[] ALLOWLIST = {
@@ -47,6 +54,10 @@ public class QuetzalPayloadMapper implements PayloadMapper {
         JsonNode root = Payloads.parseObject(rawBody);
         if (root == null) {
             return unmappable(QuarantineReason.INVALID_PAYLOAD, null, "body is not a JSON object");
+        }
+        if (!SUPPORTED_API_VERSION.equals(textOrNull(root, "/api_version"))) {
+            return unmappable(QuarantineReason.UNSUPPORTED_PROVIDER_VERSION, root,
+                    "api_version is not " + SUPPORTED_API_VERSION);
         }
         try {
             String type = requiredText(root, "/type");

@@ -2,7 +2,7 @@
 
 ## 1. Context diagram
 
-Dashed boxes are **trust boundaries**. Numbers follow one notification from the provider to Salesforce.
+Dashed boxes are **trust boundaries**. The numbered arrows (1–5) follow one notification from the provider to Salesforce. Arrows without a number are side flows: downstream subscriptions, status updates, quarantine and operations lookups.
 
 ```mermaid
 flowchart LR
@@ -19,6 +19,7 @@ flowchart LR
     subgraph AZURE["Azure (private network)"]
         IN["payment-intake"]
         SB[("Service Bus<br/>topic + DLQs")]
+        QQ[("payments-quarantine<br/>queue")]
         SFW["salesforce-writer"]
         DB[("Cosmos DB<br/>notification status")]
         OPS["payment-ops"]
@@ -35,7 +36,9 @@ flowchart LR
         NOT["Notifications"]
     end
 
-    OPSU["Operations"]
+    subgraph CORP["Meridian corporate network"]
+        OPSU["Operations"]
+    end
 
     QZ & AN & AU -->|"1 · webhook"| APIM
     APIM -->|"2 · forward"| IN
@@ -44,15 +47,18 @@ flowchart LR
     SFW -->|"5 · upsert"| SF
     SB -->|"subscribe"| FIN & NOT
     IN & SFW -->|"status"| DB
+    IN -->|"cannot be mapped"| QQ
     OPSU -->|"find a notification"| APIM
     APIM --> OPS
     OPS --> DB
+    OPS -->|"review and replay"| QQ
 
     style INTERNET stroke-dasharray:5 5
     style PLATFORM stroke-dasharray:5 5
     style AZURE stroke-dasharray:5 5
     style SALESFORCE stroke-dasharray:5 5
     style DOWNSTREAM stroke-dasharray:5 5
+    style CORP stroke-dasharray:5 5
 ```
 
 Not drawn, to keep the diagram readable: every Azure service reads its secrets from **Key Vault** with a managed identity and sends telemetry to **Azure Monitor**.
@@ -63,7 +69,7 @@ Not drawn, to keep the diagram readable: every Azure service reads its secrets f
 |---|---|
 | **API Manager** | Single public entry point. Forwards the webhook body untouched to `payment-intake`. Also publishes the internal Ops API. |
 | **payment-intake** | Verifies the provider's signature, translates the payload into the canonical event, publishes it and only then answers `2xx` to the provider. |
-| **Service Bus** | Durable buffer between the providers and Salesforce. One subscription per consumer, each with its own dead-letter queue. The Salesforce subscriptions use sessions per payment (see 4.4). |
+| **Service Bus** | Durable buffer between the providers and Salesforce. One subscription per consumer, each with its own dead-letter queue. The Salesforce subscriptions use sessions per payment (see 4.4). The same namespace holds the `payments-quarantine` queue, written by `payment-intake` for authentic notifications that cannot be mapped (see 5.2). |
 | **salesforce-writer** | Reads events, discards stale ones and upserts `Premium_Payment__c` in batches. |
 | **Cosmos DB** | Status of each notification (received, recorded, skipped, failed, dead-lettered) and latest state of each payment. |
 | **payment-ops** | Lets operations look up a notification by its provider id (FR7). Also runs the reconciliation that reports lost or stuck payments (`OPERATIONS.md`). |
@@ -75,10 +81,12 @@ Not drawn, to keep the diagram readable: every Azure service reads its secrets f
 | Boundary | Main control |
 |---|---|
 | Internet → API Manager | TLS, then the provider's signature, verified in `payment-intake` |
-| API Manager → Azure | Private network plus a machine-to-machine token from the IdP |
+| API Manager → Azure | Private network, with ingress accepted only from the API Manager's subnet, plus a machine-to-machine token from the IdP that `payment-intake` validates (issuer, audience, expiry) before the signature check. The token check is not built yet (`practical/README.md`, known gaps). |
 | Inside Azure | Managed identities with least privilege. No keys or connection strings. |
 | Azure → Salesforce | OAuth client credentials, dedicated integration user |
-| Operations → payment-ops | Corporate SSO with the `payments-ops-read` role (`payments-ops-replay` for replays). Responses carry no personal data. |
+| Corporate network → API Manager (internal gateway) → payment-ops | Corporate SSO with the `payments-ops-read` role (`payments-ops-replay` for replays). Responses carry no personal data. |
+
+**Replayed requests.** Quetzal and Andina sign a timestamp, so a captured request sent again later is rejected with `401`. Austral signs only the body. A replayed Austral request therefore passes the signature check, but it carries the same `eventId` as the original, so it is answered `200` as a duplicate and changes nothing (4.2).
 
 ## 2. Sequence diagram
 
@@ -107,17 +115,26 @@ sequenceDiagram
     alt Invalid signature or timestamp too old
         IN-->>P: 401 (not accepted)
     else Signature valid
-        IN->>IN: map to canonical event
-        IN->>DB: business key already received?
-        alt Duplicate
-            IN-->>P: 200 (nothing published)
-        else New notification
-            IN->>SB: publish canonical event
+        IN->>IN: map to canonical event and validate it against the schema
+        alt Cannot be mapped (unknown or missing state, unsupported provider version, bad payload, bad policy reference) or breaks the schema
+            IN->>SB: send to payments-quarantine (no payer data)
             alt Service Bus unavailable
                 IN-->>P: 503 (provider retries later)
-            else Published
-                IN->>DB: save status RECEIVED
-                IN-->>P: 200 (accepted)
+            else Stored
+                IN-->>P: 200 (kept for review, not published)
+            end
+        else Mapped
+            IN->>DB: business key already received?
+            alt Duplicate
+                IN-->>P: 200 (nothing published)
+            else New notification
+                IN->>SB: publish canonical event
+                alt Service Bus unavailable
+                    IN-->>P: 503 (provider retries later)
+                else Published
+                    IN->>DB: save status RECEIVED
+                    IN-->>P: 200 (accepted)
+                end
             end
         end
     end
@@ -150,9 +167,9 @@ sequenceDiagram
 | Case | What happens | Why |
 |---|---|---|
 | Invalid signature or old timestamp | `401`, nothing is stored or published | The request is not authentic, so it is not accepted (FR1). |
-| Unknown provider state | `200`, sent to the quarantine queue, alert | Never guess a status; keep the notification safe until the adapter is fixed. |
+| Unknown or missing provider state, unsupported provider API version, bad payload, or policy reference that cannot be normalized | `200`, sent to the quarantine queue, alert | Never guess a status; keep the notification safe until the adapter or the data is fixed. |
 | Duplicate | `200` without publishing again | The provider stops retrying, and the payment is not counted twice (FR4). |
-| Service Bus unavailable | `503`, the provider retries | We only answer `2xx` when the event is safely stored (NFR3). |
+| Service Bus unavailable (topic or quarantine queue) | `503`, the provider retries | We only answer `2xx` when the event, or the quarantined notification, is safely stored (NFR3). |
 | Late or out-of-order event | Skipped by `salesforce-writer` | A refunded payment can never go back to captured (FR5). |
 | Salesforce data error (`400`) | Dead-lettered at once | Retrying cannot fix bad data and only wastes API budget. |
 | Salesforce unavailable (`5xx`) | Circuit breaker pauses reading, then resumes | Outages last 5 to 90 minutes; the queue holds the events meanwhile. |
@@ -232,10 +249,15 @@ Its retry (`03-transaccion-aprobada-reintento.json`) has a different `notificaci
 An **unknown or missing** provider state is never guessed, defaulted or left empty, because a wrong `Status__c` changes the customer's coverage through the Salesforce flow. Instead:
 
 1. The signature is valid, so the notification is authentic: `payment-intake` answers `200` and stores it durably.
-2. It is **not** sent to Salesforce. It goes to the `payments-quarantine` queue with reason `UNKNOWN_PROVIDER_STATUS` (see 5.2), and an alert is raised.
-3. Once the adapter supports the new state, operations replays it. The replay goes through the same ordering check as any other event.
+2. It is **not** sent to Salesforce. It goes to the `payments-quarantine` queue (see 5.2), and an alert is raised. The reason tells operations what to fix: `UNKNOWN_PROVIDER_STATUS` for a state the adapter does not know yet (the adapter needs a new rule), `INVALID_PAYLOAD` for a missing state (the provider sent a broken notification).
+3. Once the adapter supports the new state, operations replays it. The replay goes through the same ordering check as any other event. A missing state is never filled in by us: operations asks the provider to resend the notification (assumption 13 in `docs/ASSUMPTIONS.md`).
 
 Rejecting it with a non-`2xx` code was discarded. It would depend on the provider's retry window, and Andina retries only 5 times in 24 hours, so a fix that took longer would lose the notification.
+
+**Provider API versions** follow the same rule. A new provider version is handled inside that provider's adapter, never in the canonical event (NFR9):
+
+- **Quetzal** declares its version in every event (`api_version`). The adapter maps only `2025-06-01`. A new version could change what a field means without changing its shape, for example the unit of `amount`, and the event would still pass the schema with a wrong amount. Any other version, or none, is quarantined with reason `UNSUPPORTED_PROVIDER_VERSION`, and the alert fires. Once the adapter supports the new version, operations replays it (assumption 14 in `docs/ASSUMPTIONS.md`).
+- **Andina** sends no version in the payload, and a new version takes effect on a cut-over date (see its `CHANGELOG.md`). Its adapter therefore accepts the old and the new format of a field at the same time, as it does for `referencia` (3.5).
 
 ### 3.5 Policy number normalization
 
@@ -357,9 +379,9 @@ The principle: **retry only what time can fix**. Everything else stops at once, 
 | Error | Retried? | How | Then |
 |---|---|---|---|
 | Invalid signature or old timestamp | No | `401` | Nothing is stored. An alert fires if the rate is abnormal: either an attack or a secret rotation went wrong. |
-| Service Bus unavailable | By the **provider** | `503`. One quick internal retry only if time allows (internal deadline of 3 s, ADR-0003). | The provider retries with its own policy: Quetzal up to 3 days, Andina 5 times in 24 h, Austral 8 times in 48 h. |
+| Service Bus unavailable (topic or quarantine queue) | By the **provider** | `503`. One quick internal retry only if time allows (internal deadline of 3 s, ADR-0003). | The provider retries with its own policy: Quetzal up to 3 days, Andina 5 times in 24 h, Austral 8 times in 48 h. |
 | Cosmos DB unavailable | No | The duplicate lookup is skipped and the event is still published (ADR-0003). | Duplicates are caught by Service Bus duplicate detection and by the ordering rule in `salesforce-writer`. |
-| Valid signature, but unknown state, unreadable payload or policy reference that cannot be normalized | No | `200`, sent to quarantine (5.2) | Reviewed and replayed once the adapter is fixed. |
+| Valid signature, but unknown or missing state, unsupported provider API version, unreadable payload or policy reference that cannot be normalized | No | `200`, sent to quarantine (5.2) | Reviewed and replayed once the adapter is fixed. |
 
 **In `salesforce-writer` (asynchronous)**
 
@@ -383,14 +405,14 @@ Two details matter here:
 |---|---|---|
 | DLQ of each `sf-writer-*` subscription | `salesforce-writer` | Canonical events that could not be recorded in Salesforce |
 | DLQ of `finance` and `notifications` | The consumers themselves | Their own failures. They own them. |
-| `payments-quarantine` | `payment-intake` | Authentic notifications that cannot be mapped (unknown state, unreadable payload, policy reference that cannot be normalized). Payer fields are removed before storing. |
+| `payments-quarantine` | `payment-intake` | Authentic notifications that cannot be mapped (unknown or missing state, unsupported provider API version, unreadable payload, policy reference that cannot be normalized). Payer fields are removed before storing. |
 
 Every dead-lettered or quarantined message carries:
 
-- A **reason code**: `POLICY_NOT_FOUND`, `SALESFORCE_VALIDATION`, `CONFLICTING_STATE`, `RETRIES_EXHAUSTED`, `UNKNOWN_PROVIDER_STATUS`, `INVALID_PAYLOAD`, `INVALID_POLICY_REFERENCE` or `MaxDeliveryCountExceeded`.
+- A **reason code**: `POLICY_NOT_FOUND`, `SALESFORCE_VALIDATION`, `CONFLICTING_STATE`, `RETRIES_EXHAUSTED`, `UNKNOWN_PROVIDER_STATUS`, `UNSUPPORTED_PROVIDER_VERSION`, `INVALID_PAYLOAD`, `INVALID_POLICY_REFERENCE` or `MaxDeliveryCountExceeded`.
 - The `correlationId`, the provider ids and the last error. Never payer personal data.
 
-The notification's status in Cosmos DB becomes `DEAD_LETTERED` with the same reason, so operations sees it without searching logs (FR7). An alert fires as soon as **any** DLQ or quarantine of **any** country is not empty. In INC-0412 only Mexico had one.
+For a dead-lettered event, the notification's status in Cosmos DB becomes `DEAD_LETTERED` with the same reason, so operations sees it without searching logs (FR7). A quarantined notification has no `eventId` yet, so it has no document in Cosmos DB. `payment-ops` finds it by peeking the quarantine queue (reading without removing), filtering on the provider ids and the reason, which travel as message properties. The queue holds few messages, for 30 days at most, so this stays cheap (see 8.1). An alert fires as soon as **any** DLQ or quarantine of **any** country is not empty. In INC-0412 only Mexico had one.
 
 ### 5.3 Safe replay
 
@@ -533,7 +555,7 @@ What we **do not** persist:
 | `RECORDED` | Written to Salesforce |
 | `SKIPPED` | Not applied because it was stale or a duplicate under the ordering rule (4.3) |
 | `FAILED` | Last attempt failed, still being retried |
-| `DEAD_LETTERED` | In a DLQ or in quarantine, with `reason` |
+| `DEAD_LETTERED` | In the DLQ of a `sf-writer-*` subscription, with `reason`. Quarantined notifications are not in this container (see 5.2). |
 
 `lastError` holds a sanitized error code and message, never a payload.
 
@@ -606,6 +628,7 @@ The API is published in the API Manager on the **internal** gateway only.
 |---|---|
 | "The customer's receipt shows transaction `TRX-CO-5603318`" | `GET /ops/v1/payments?provider=Andina&providerTransactionId=TRX-CO-5603318` |
 | "Andina says it sent notification `ntf-c02d9e13`" | `GET /ops/v1/notifications?provider=Andina&providerEventId=ntf-c02d9e13` |
+| "Andina says it sent `ntf-c02d9e13`, but there is no event for it" | `GET /ops/v1/quarantine?provider=Andina&providerEventId=ntf-c02d9e13` peeks `payments-quarantine` and returns the reason |
 | "What is stuck in Colombia since Saturday?" | `GET /ops/v1/notifications?country=CO&processingStatus=DEAD_LETTERED&from=2026-11-28` (paged) |
 | "Follow one event end to end" | `GET /ops/v1/notifications/{eventId}` returns the `correlationId`, which opens the trace in Application Insights |
 | "Replay these messages" | `POST /ops/v1/replays` with `dryRun: true` first (see 5.3) |

@@ -20,7 +20,7 @@ info:
     |---|---|
     | New, valid notification | `200` |
     | Duplicate of a notification already accepted | `200` (nothing is processed twice) |
-    | Valid signature, but unknown state, unreadable payload or policy reference that cannot be normalized | `200` (kept in quarantine for review) |
+    | Valid signature, but unknown state, unsupported API version, unreadable payload or policy reference that cannot be normalized | `200` (kept in quarantine for review) |
     | Missing or invalid signature, or timestamp outside the window | `401` |
     | Body larger than 256 KB | `413` (API Manager) |
     | Rate limit exceeded | `429` (API Manager) |
@@ -306,6 +306,7 @@ components:
           example: charge.succeeded
         api_version:
           type: string
+          description: Only `2025-06-01` is mapped. Any other version, or none, is accepted and quarantined until Meridian's adapter supports it.
           example: '2025-06-01'
         created:
           type: integer

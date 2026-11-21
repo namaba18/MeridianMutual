@@ -32,7 +32,7 @@ For scale: in INC-0412, Colombia dead-lettered 4,312 notifications in 32 hours, 
 
 ### 2.1 How the correlation id travels
 
-1. **API Manager → `payment-intake`.** The gateway forwards its request id in `X-Request-Id` (assumption 8). `payment-intake` creates the `correlationId` (UUID) on arrival, before the signature check, and logs both ids, so gateway and application logs can be joined. It returns `X-Correlation-Id` on `200` and `503`, as the webhook contract defines, so the provider's support team can quote it. A `401` gets none: nothing is stored for it.
+1. **API Manager → `payment-intake`.** The gateway forwards its request id in `X-Request-Id` (assumption 8). `payment-intake` creates the `correlationId` (UUID) on arrival, before the signature check, and logs both ids, so gateway and application logs can be joined. The request id comes from outside, so it is logged only if it looks like an id. It returns `X-Correlation-Id` on `200` and `503`, as the webhook contract defines, so the provider's support team can quote it. A `401` gets none: nothing is stored for it.
 2. **Service Bus.** The id is in the event field `correlationId` and in the message property `CorrelationId`. The Azure SDK adds the W3C trace context to the message properties, so the trace continues across the queue.
 3. **Cosmos DB.** The `notifications` document stores it with the `eventId` and the provider ids.
 4. **`salesforce-writer`.** The id is in the logging context of each message. A composite call carries up to 200 events, so its span is linked to each message's span, and the batch log line lists their `eventId`s.
@@ -73,7 +73,7 @@ These never appear in logs, traces, metric dimensions or alert texts, at any lev
 | Alert | Condition | Sev | Route | First check |
 |---|---|---|---|---|
 | Payments dead-lettered (per country) | Any, in 5 min | 1 | Page | Reason codes in the Payment Ops API |
-| Notifications quarantined (per country) | Any, in 5 min | 2 | Page | Reason codes; did the provider change its format? |
+| Notifications quarantined (per country) | Any, in 5 min | 2 | Page | Reason codes; did the provider change its format or its API version? |
 | Freshness p95 over 5 min (per country) | p95 of the last 15 min, in 2 consecutive checks (every 5 min) | 2 | Page | Salesforce status, circuit breaker, API usage |
 | Payments stuck over 1 h (per country) | `ops.notifications.stuck > 0` | 2 | Page | Writer running? Salesforce outage over 60 min? |
 | Intake unavailable | Over 1% of webhooks get `503` in 5 min | 1 | Page | Service Bus health (ADR-0003) |
