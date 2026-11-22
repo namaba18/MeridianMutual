@@ -21,6 +21,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
     IngestionMode: 'LogAnalytics'
     // Telemetry is accepted only with Entra ID tokens (managed identities), not the instrumentation key.
     DisableLocalAuth: true
+    // Ingestion stays on the public endpoint: a private one needs an Azure Monitor Private Link
+    // Scope over the shared workspace, which is a platform decision (infra/README.md, known gaps).
     publicNetworkAccessForIngestion: 'Enabled'
     publicNetworkAccessForQuery: 'Enabled'
   }

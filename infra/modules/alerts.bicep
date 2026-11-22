@@ -158,7 +158,7 @@ resource quarantined 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = [for 
   tags: tags
   properties: {
     displayName: 'Payments ${c.code}: notifications quarantined'
-    description: 'payment-intake quarantined at least one ${c.provider} notification (unknown state, unreadable payload or policy reference that cannot be normalized). Check the reason in the Payment Ops API.'
+    description: 'payment-intake quarantined at least one ${c.provider} notification (unknown or missing state, unsupported provider API version, unreadable payload, policy reference that cannot be normalized, or an event that breaks the schema). Check the reason in the Payment Ops API.'
     severity: 2
     enabled: enabled
     evaluationFrequency: 'PT5M'

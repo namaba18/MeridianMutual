@@ -1,6 +1,7 @@
 // Network for one environment: a VNet with a subnet for the Container Apps environment and a
 // subnet for private endpoints, plus the private DNS zones those endpoints need.
-// Nothing in this design has a public endpoint: the only internet-facing entry is the API Manager
+// No service in this design accepts traffic on a public endpoint, except telemetry ingestion into
+// Application Insights (see monitoring.bicep). The only internet-facing entry is the API Manager
 // (SOLUTION_DESIGN §1.2), which reaches this VNet over private connectivity (assumption 8).
 
 @description('Base name used for every resource, e.g. pay-dev.')

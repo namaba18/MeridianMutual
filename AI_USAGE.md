@@ -82,6 +82,17 @@ Before submitting, I went through each part again, asking about anything that wa
   - **Austral signs no timestamp**, and the design did not say what protects against a replayed request. §1.2 now explains that it is answered as a duplicate of the original `eventId`.
 
   The same pass found that `SUBMISSION.md` still said `docs/ASSUMPTIONS.md` lists 12 assumptions. It lists 14.
+- **Two statements in Part C** (`infra/README.md`, `docs/infra/AZURE_SERVICES.md`), found while going through the infrastructure again:
+  - The least-privilege table said `payment-ops` reads the DLQs. It also reads the quarantine queue, which the Bicep already allows and FR7 now relies on.
+  - The documents said nothing in the workload has a public endpoint, but Application Insights receives telemetry on its public endpoint. The risk is low, because only an Entra ID identity can send data and payer data is never sent. It is now stated in the documents and in the Bicep comments, and listed as a known gap for the platform team, since a private endpoint needs an Azure Monitor Private Link Scope over the shared workspace. `bicep build` and `bicep lint` still pass.
+- **A consistency pass over Parts C and D.** Part D matched the incident and the design, and its figures were recomputed. Part C had seven issues:
+  - **The CD deletion guard could never fire.** It looked for resources marked `Delete` in the what-if, which only happens in complete mode, and the pipeline deploys in incremental mode. A change made by hand shows up as a property deletion instead, so the guard now looks for both and lists the resources. A query test with sample what-if output (a hand-added IP restriction, a clean plan and a deleted resource) gave the expected result in each case, and actionlint passes on the three workflows. The README now says the guard has not run against real what-if output, which can need a list of noisy properties.
+  - **The prod plan identity could not run the full what-if**: the template also grants `AcrPull` in the shared registry's resource group, where that identity had no rights. The CD README now gives it read and what-if rights there.
+  - **A rollback redeploys the old image with the current infrastructure.** The README said an environment is always described by one commit; it now says so, and that reverting the commit rolls back both.
+  - **Two CI tools ran their latest version**: oasdiff (`latest` was published the day of this review) and the Bicep CLI. Both are now pinned (oasdiff v1.35.0, Bicep 0.49.2), like every other tool.
+  - **Trace sampling** said "sample successful traces" in `AZURE_SERVICES.md` and "100%" in `OPERATIONS.md`. Both now say 100%, which the cost estimate already covers.
+  - **The quarantine alert description** listed only three of the quarantine reasons.
+  - **Managed identities** had no Well-Architected table in `AZURE_SERVICES.md`, unlike every other service.
 
 ## Data I shared with AI tools
 

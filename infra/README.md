@@ -40,7 +40,7 @@ infra/
 |---|---|---|
 | `id-…-intake` | Read webhook secrets; **send** to the topic and to quarantine; write `notifications` | Read any message; read the Salesforce secret |
 | `id-…-sfwriter-<cc>` (one per country) | Read the Salesforce secret; **receive** from its own country's subscription; write `notifications` and `payment-state` | Read another country; send to the topic |
-| `id-…-ops` | Read `notifications` and `payment-state`; read DLQs; replay to the topic; write `replay-audit` | Read any secret |
+| `id-…-ops` | Read `notifications` and `payment-state`; read the DLQs and the quarantine queue; replay to the topic; write `replay-audit` | Read any secret |
 | Downstream teams | **Receive** from their own subscription | Anything else |
 
 No identity can delete Cosmos DB documents (they expire through TTL), and no service accepts keys: Service Bus, Cosmos DB and Application Insights have local authentication disabled.
@@ -129,5 +129,6 @@ az deployment group create \
 
 - **Private DNS zones** are created per environment. In a hub-and-spoke landing zone they would live in the hub and be referenced instead.
 - **NSGs and egress control** for the subnets are not defined. Production would route egress through the platform firewall, with a fixed public IP the Salesforce team can allowlist.
+- **Application Insights ingestion uses its public endpoint.** Every other service is private. The risk is low: local authentication is disabled, so only an Entra ID identity can send telemetry, and payer data is never sent. Making it private needs an Azure Monitor Private Link Scope, which covers the shared Log Analytics workspace too, so it belongs to the platform team.
 - **Diagnostic settings** send everything to the platform workspace. Retention and cost of those logs are governed at platform level.
 - **The writer and ops metrics used by alerts** (`writer.records`, `writer.freshness.seconds`, `writer.salesforce.calls.rolling24h`, `ops.notifications.stuck`) are a contract for `salesforce-writer` and `payment-ops`, which are designed but not built.

@@ -95,7 +95,7 @@ Not included because they already exist at platform level: the API Manager, the 
 
 ## Network: VNet, Private Endpoints, Private DNS
 
-**Why.** Nothing in this workload has a public endpoint. The only internet-facing entry is the API Manager, which reaches the VNet privately (assumption 8).
+**Why.** Nothing in this workload accepts traffic on a public endpoint, except telemetry ingestion into Application Insights (see below). The only internet-facing entry is the API Manager, which reaches the VNet privately (assumption 8).
 
 **Discarded.** Service endpoints with firewall rules (the services keep public endpoints, and Service Bus Standard does not support them anyway).
 
@@ -113,6 +113,14 @@ Not included because they already exist at platform level: the API Manager, the 
 
 **Discarded.** System-assigned identities (roles would be granted after the app starts, which causes failed first starts) and service principals with secrets (they are secrets).
 
+| Pillar | How |
+|---|---|
+| Reliability | No credential can expire or be rotated by mistake; Azure issues and renews the tokens. The roles exist before the first replica starts |
+| Security | No secrets for Azure resources anywhere (NFR6); one identity per workload and per country, each with roles on single resources only (`infra/README.md`) |
+| Cost | Free |
+| Operational excellence | Identities and their roles are code, next to the resource they grant access to |
+| Performance | Tokens are cached and renewed by the Azure SDK, off the request path |
+
 ## Application Insights and Azure Monitor alerts
 
 **Why.** End-to-end tracing by `correlationId`, per-country freshness and DLQ alerts (NFR7). Workspace-based, on the platform Log Analytics workspace, so there is one place to query and one retention policy.
@@ -122,8 +130,8 @@ Not included because they already exist at platform level: the API Manager, the 
 | Pillar | How |
 |---|---|
 | Reliability | Alerts per country and platform-level DLQ and quarantine alerts that do not depend on our own telemetry |
-| Security | Ingestion with Entra ID only (`DisableLocalAuth`); payer personal data is never sent |
-| Cost | Ingestion is the cost driver: sample successful request traces, keep every failure |
+| Security | Ingestion with Entra ID only (`DisableLocalAuth`); payer personal data is never sent. Ingestion uses the public endpoint until the platform adds an Azure Monitor Private Link Scope (`infra/README.md`, known gaps) |
+| Cost | Ingestion is the cost driver. Traces are kept at 100% (`OPERATIONS.md` §2.2), which this volume allows: about 15 GB per month in prod. If the volume grew, successful requests would be sampled first, never failures |
 | Operational excellence | Two routes: page for payments at risk now, notify for the working day |
 | Performance | Freshness p95 is measured and alerted per country |
 

@@ -19,8 +19,8 @@ Every gate is a **required status check** in the branch protection of `main` (to
 | 3 | SAST | CodeQL (`security-extended`) | A security finding in our code | Internet-facing webhook code handling payment data (injection, unsafe deserialization, logging of sensitive data) |
 | 4 | Dependency review | GitHub dependency review | A new dependency has a known HIGH/CRITICAL vulnerability or a GPL/AGPL licence | Stops vulnerable libraries **before** they merge, not after an alert |
 | 5 | Secret scan | Gitleaks, full history | A secret is committed outside the allowlisted fictional material | NFR6. PR-214 is exactly this failure: a live secret in `application.yml` |
-| 6 | API contracts | Spectral, Ajv, oasdiff | The OpenAPI or the JSON Schema is invalid, or the webhook contract has a **breaking change** against `main` | Providers integrate against the contract; a breaking change must be a new `/v2` (docs/api/README.md) |
-| 7 | IaC | Bicep build + strict linter, for dev, test and prod | A template or a parameter file does not compile, or breaks a linter rule (secrets in outputs, hard-coded URLs, unused code…) | Infrastructure changes are code changes: they are validated before merge, not discovered during a deployment |
+| 6 | API contracts | Spectral 6.11.1, Ajv 5.0.0, oasdiff v1.35.0 | The OpenAPI or the JSON Schema is invalid, or the webhook contract has a **breaking change** against `main` | Providers integrate against the contract; a breaking change must be a new `/v2` (docs/api/README.md) |
+| 7 | IaC | Bicep 0.49.2 build + strict linter, for dev, test and prod | A template or a parameter file does not compile, or breaks a linter rule (secrets in outputs, hard-coded URLs, unused code…) | Infrastructure changes are code changes: they are validated before merge, not discovered during a deployment |
 
 **Deliberately not in CI**, and why:
 - **Mutation testing and coverage thresholds:** a coverage percentage rewards quantity, not the right tests. The tests are reviewed in the pull request instead.
@@ -48,11 +48,11 @@ flowchart LR
 | **Build once, promote the same artifact** | One image per commit, tagged with its SHA (never `latest`), deployed unchanged to dev, test and prod |
 | **Infrastructure and application together** | One Bicep deployment per environment carries both, so an environment is always described by one commit |
 | **Plan before change** | Every environment runs `what-if` first and publishes it to the job summary; prod's plan is shown **before** the approval |
-| **Deletion guard** | If what-if shows a deletion (someone changed the environment by hand), the deployment stops for a person to look |
+| **Deletion guard** | If what-if would delete a resource or a property, the deployment stops and lists the resources for a person to look. In incremental mode a change made by hand (for example an IP restriction added in the portal) appears as a property deletion, so that is what the guard looks for |
 | **Approval for prod** | GitHub environment `production`: 2 required reviewers, the author cannot approve their own change, only the `main` branch can deploy |
 | **One deployment at a time** | `concurrency: cd-main`, never cancelled half-way |
 | **Verify, then trust** | After deploying, the active revision of every Container App must report `Healthy` (driven by the liveness and readiness probes) |
-| **Rollback** | Run `cd.yml` manually with the image tag of the last good commit: it skips the build and redeploys that image everywhere |
+| **Rollback** | Of the application: run `cd.yml` manually with the image tag of the last good commit. It skips the build and redeploys that image everywhere, with the infrastructure of the current `main`. Of the infrastructure too: revert the commit on `main`, which runs the normal CD |
 
 ## Authentication to Azure without stored secrets
 
@@ -63,7 +63,7 @@ The pipeline uses **OpenID Connect**. A job asks GitHub for a short-lived token 
 | `build` | `id-github-build` | `repo:<owner>/<repo>:environment:build` | `AcrPush` on the shared registry only |
 | `dev` | `id-github-deploy-dev` | `repo:<owner>/<repo>:environment:dev` | dev resource group (+ AcrPull grants on the registry) |
 | `test` | `id-github-deploy-test` | `repo:<owner>/<repo>:environment:test` | test resource group (+ AcrPull grants on the registry) |
-| `prod-plan` | `id-github-plan-prod` | `repo:<owner>/<repo>:environment:prod-plan` | prod resource group: `Reader` plus a custom role with only `Microsoft.Resources/deployments/whatIf/action` |
+| `prod-plan` | `id-github-plan-prod` | `repo:<owner>/<repo>:environment:prod-plan` | prod resource group and the shared registry's resource group: `Reader` plus a custom role with only `Microsoft.Resources/deployments/whatIf/action`. The registry is included because the template grants `AcrPull` there, so what-if evaluates that module too |
 | `production` | `id-github-deploy-prod` | `repo:<owner>/<repo>:environment:production` | prod resource group (+ AcrPull grants on the registry) |
 
 Each deploy identity has **Contributor** on its own resource group, plus **Role Based Access Control Administrator with a condition** that allows assigning only the roles the template uses (Key Vault Secrets User, Azure Service Bus Data Sender/Receiver, AcrPull; see infra/README.md). Because the template grants `AcrPull` on the shared registry, the same conditional role is also needed on that registry. Cosmos DB data roles are not Azure RBAC and are covered by Contributor on the account. A job in `dev` cannot obtain the prod identity, because the federated credential only trusts tokens issued for the `production` environment, and that environment only runs after approval.
@@ -72,7 +72,7 @@ Each GitHub environment stores **variables, not secrets**: `AZURE_CLIENT_ID`, `A
 
 ## To switch CD on (not done in this assessment)
 
-1. Create the identities and federated credentials above (platform team).
+1. Create the identities, federated credentials and role assignments above (platform team), including the registry's resource group for every deploy identity and for the prod plan identity.
 2. Create the GitHub environments `build`, `dev`, `test`, `prod-plan` and `production` with their variables; on `production`, add the required reviewers and restrict it to `main`.
 3. Protect `main`: pull requests only, 1 approval, the 7 CI jobs as required checks.
 4. Set the repository variable `CD_ENABLED = true`.
@@ -81,4 +81,5 @@ Each GitHub environment stores **variables, not secrets**: `AZURE_CLIENT_ID`, `A
 
 - Only `payment-intake` has an image in this repository. `salesforce-writer` and `payment-ops` are designed but not built, so a real first deployment needs their images (same Dockerfile pattern).
 - CD has **not run** (it needs Azure). The workflows pass actionlint, and these CI steps were run locally with the same tools and versions: Bicep build and lint, Spectral, Ajv, Gitleaks (history of `main`), Maven `verify`, and building and starting the image (health `UP`, non-root user, `401` for an unsigned webhook). Trivy could not be run locally (its vulnerability database could not be downloaded from this machine), so gate 2 is first exercised on GitHub.
+- **The deletion guard has not run against real what-if output.** What-if can report harmless property changes ("noise") for some resource types. After the first runs in dev, any known noisy property would be listed and ignored by the guard, so it only stops on real drift.
 - The base image is referenced by tag (`eclipse-temurin:21-jre-alpine`); in production it is pinned by digest and updated by Dependabot.

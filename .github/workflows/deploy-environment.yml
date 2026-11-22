@@ -78,11 +78,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Guard against deletions
-        # The template never deletes on its own (incremental mode), but a what-if showing a Delete
-        # means someone changed the environment by hand. Stop and let a person look.
+        # In incremental mode what-if never reports a whole resource as Delete (only complete mode
+        # does). A change made by hand shows up instead as a Modify whose delta deletes a property,
+        # for example an IP restriction added in the portal that this deployment would remove.
+        # Stop on either, list the resources, and let a person look at the plan.
         run: |
-          if jq -e '[.changes[] | select(.changeType == "Delete")] | length > 0' whatif.json > /dev/null; then
-            echo "::error::What-if reports deletions in ${{ inputs.params }}. Review the plan before deploying."
+          deletions=$(jq -r '.changes[]
+            | select(.changeType == "Delete"
+                or ([(.delta // []) | .. | objects | select(.propertyChangeType? == "Delete")] | length > 0))
+            | .resourceId' whatif.json)
+          if [ -n "$deletions" ]; then
+            echo "::error::What-if would delete resources or properties in ${{ inputs.params }}. Review the plan before deploying."
+            echo "$deletions"
             exit 1
           fi
 

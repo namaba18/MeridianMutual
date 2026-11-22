@@ -150,7 +150,7 @@ jobs:
         run: |
           if git cat-file -e "origin/${{ github.base_ref }}:docs/api/webhooks.openapi.yaml" 2>/dev/null; then
             git show "origin/${{ github.base_ref }}:docs/api/webhooks.openapi.yaml" > "$RUNNER_TEMP/base.yaml"
-            docker run --rm -v "$RUNNER_TEMP:/base" -v "$PWD:/repo" tufin/oasdiff \
+            docker run --rm -v "$RUNNER_TEMP:/base" -v "$PWD:/repo" tufin/oasdiff:v1.35.0 \
               breaking /base/base.yaml /repo/docs/api/webhooks.openapi.yaml --fail-on ERR
           else
             echo "No webhook contract on ${{ github.base_ref }} yet: nothing to compare."
@@ -164,8 +164,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Install Bicep
-        run: az bicep install
+      - name: Install Bicep (the version the templates were validated with)
+        run: az bicep install --version v0.49.2
       - name: Build and lint
         run: |
           az bicep build --file infra/main.bicep --stdout > /dev/null
