@@ -5,8 +5,8 @@
 | Field | Value |
 |---|---|
 | Candidate ID (provided by your recruiter) | namaba93@gmail.com|
-| Final commit SHA | |
-| Date and time of submission (with time zone) | |
+| Final commit SHA | `8b6985f2a9536c76ec943778cd5d8aa643eb5921` |
+| Date and time of submission (with time zone) | 2026-11-21 19:28 (UTC−5, Colombia time) |
 
 ## Time spent
 
